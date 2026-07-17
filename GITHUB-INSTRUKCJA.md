@@ -1,16 +1,15 @@
-# Szybka publikacja DartLiga PWA
+# Szybka aktualizacja DartLiga PWA 1.1.1
 
-1. Utwórz na GitHubie puste repozytorium `dartliga-pwa`.
-2. Wgraj wszystkie pliki i foldery z paczki.
-3. Wejdź w `Settings → Pages`.
-4. Wybierz `Source → GitHub Actions`.
-5. Wejdź w `Actions` i otwórz workflow `Publikacja DartLiga PWA`.
-6. Po zielonym zakończeniu kliknij adres opublikowanej strony.
+1. W repozytorium otwórz **Code → Add file → Upload files**.
+2. Wgraj pliki z paczki aktualizacyjnej i zatwierdź nadpisanie.
+3. Kliknij **Commit changes**.
+4. W zakładce **Actions** poczekaj na zielony status workflow.
+5. Otwórz stronę ponownie i sprawdź numer wersji **1.1.1**.
+
+Folder `.github` pozostaje bez zmian.
 
 Docelowy adres:
 
 ```text
-https://TWOJ-LOGIN.github.io/dartliga-pwa/
+https://mikizalesie.github.io/DartLiga/
 ```
-
-Jeśli strona pokazuje starą wersję, zamknij wszystkie jej karty, uruchom ponownie albo usuń dane witryny w ustawieniach przeglądarki. Przy kolejnych zmianach zwiększ numer cache w `sw.js`.

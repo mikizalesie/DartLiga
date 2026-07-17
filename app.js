@@ -2,12 +2,13 @@
 
 const LEGACY_STORAGE_KEY = 'dartliga_pwa_state_v1';
 const STORAGE_KEY = 'dartliga_pwa_hub_v2';
-const APP_VERSION = '1.1.0';
+const APP_VERSION = '1.1.1';
 let route = 'home';
 let matchFilter = 'all';
 let tableGroup = 'all';
 let competitionFilter = 'all';
 let deferredInstallPrompt = null;
+let newCompetitionPanelOpen = false;
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -234,6 +235,7 @@ function render() {
           ${navButton('stats','↗','Statystyki')}
           ${navButton('settings','⚙','Ustawienia')}
         </nav>
+        <button class="btn primary sidebar-new-competition" data-new-competition>+ Nowa rozgrywka</button>
         <div class="active-competition-card">
           <span class="muted">Aktywna rozgrywka</span>
           <strong>${esc(state.settings.competitionName)}</strong>
@@ -247,7 +249,7 @@ function render() {
       <main class="main">
         <div class="mobile-head">
           <button class="brand brand-button" data-route="home"><div class="logo"></div><div><strong>DartLiga</strong><small>${esc(state.settings.competitionName)}</small></div></button>
-          <button class="btn small" data-route="settings">⚙</button>
+          <div class="row-actions"><button class="btn small primary" data-new-competition>+ Nowa</button><button class="btn small" data-route="settings">⚙</button></div>
         </div>
         ${renderRoute()}
       </main>
@@ -264,6 +266,7 @@ function render() {
     route = btn.dataset.route;
     render();
   }));
+  $$('[data-new-competition]').forEach(btn => btn.addEventListener('click', openNewCompetitionCreator));
   bindCurrentPage();
   updateInstallButton();
 }
@@ -301,7 +304,7 @@ function renderHome() {
   if (competitionFilter === 'completed') competitions = competitions.filter(c => competitionState(c) === 'completed');
   return `
     ${pageHeader('Archiwum i aktywne sezony', 'Moje rozgrywki', 'Możesz równolegle prowadzić kilka lig, grup i turniejów. Każda rozgrywka zachowuje własnych zawodników, mecze, wyniki i statystyki.', `<button class="btn primary" id="showNewCompetition">+ Nowa rozgrywka</button>`)}
-    <section class="card new-competition-panel" id="newCompetitionPanel" hidden>
+    <section class="card new-competition-panel" id="newCompetitionPanel" ${newCompetitionPanelOpen ? '' : 'hidden'}>
       <div class="section-head"><div><h2>Utwórz nową rozgrywkę</h2><p class="muted">Obecne i zakończone rozgrywki pozostaną zapisane.</p></div><button class="btn small ghost" id="hideNewCompetition">Zamknij</button></div>
       <form id="newCompetitionForm" class="form-grid cols-3">
         <div class="field"><label>Nazwa</label><input name="competitionName" maxlength="80" placeholder="np. Liga Jesienna 2027" required></div>
@@ -327,6 +330,7 @@ function competitionRow(competition) {
     </div>
     <div class="competition-actions">
       <button class="btn small primary open-competition" data-id="${competition.id}">${active?'Otwórz pulpit':'Przełącz i otwórz'}</button>
+      <button class="btn small ghost duplicate-competition" data-id="${competition.id}">Nowa na podstawie</button>
       ${competition.status === 'completed'
         ? `<button class="btn small ghost reopen-competition" data-id="${competition.id}">Wznów</button>`
         : `<button class="btn small ghost finish-competition" data-id="${competition.id}">Zakończ</button>`}
@@ -343,7 +347,7 @@ function renderDashboard() {
   const recent = completed.slice().sort((a,b) => (b.completedAt || '').localeCompare(a.completedAt || '')).slice(0, 5);
   const next = planned.slice(0, 5);
   return `
-    ${pageHeader('Centrum rozgrywek', esc(state.settings.competitionName), `${formatLabel(state.settings.format)} · ${state.settings.startScore} · do ${state.settings.legsToWin} wygranych legów · start ${formatDateTime(state.startedAt)}`, `<button class="btn ghost" data-route="home">Wszystkie rozgrywki</button><button class="btn primary" data-route="matches">Rozpocznij mecz</button>`)}
+    ${pageHeader('Centrum rozgrywek', esc(state.settings.competitionName), `${formatLabel(state.settings.format)} · ${state.settings.startScore} · do ${state.settings.legsToWin} wygranych legów · start ${formatDateTime(state.startedAt)}`, `<button class="btn ghost" data-route="home">Wszystkie rozgrywki</button><button class="btn info" data-new-competition>+ Nowa rozgrywka</button><button class="btn primary" data-route="matches">Rozpocznij mecz</button>`)}
     <div class="grid stats">
       ${statCard('Zawodnicy', state.players.length, 'aktywnych w rozgrywkach')}
       ${statCard('Mecze zakończone', completed.length, `z ${state.matches.filter(m=>!m.bye).length} zaplanowanych`)}
@@ -374,24 +378,29 @@ function empty(title, text) {
 
 function renderCompetition() {
   const groups = groupNames();
+  const hasSchedule = state.matches.length > 0;
+  const completedMatches = state.matches.filter(m => m.status === 'completed' && !m.bye).length;
+  const liveMatches = state.matches.filter(m => m.status === 'live' && !m.bye).length + (state.live ? 1 : 0);
+  const canRegenerate = hasSchedule && completedMatches === 0 && liveMatches === 0;
   return `
-    ${pageHeader('Konfiguracja', 'Rozgrywki i zawodnicy', 'Ustaw format, dodaj zawodników, przypisz grupy i wygeneruj terminarz.', `<button class="btn info" id="loadDemo">Wczytaj dane demo</button>`)}
-    <div class="grid two">
+    ${pageHeader('Konfiguracja', 'Rozgrywki i zawodnicy', 'Każda liga, faza grupowa i turniej jest zapisywana jako osobna rozgrywka.', `<button class="btn ghost" data-route="home">Moje rozgrywki</button><button class="btn primary" data-new-competition>+ Nowa rozgrywka</button><button class="btn info" id="loadDemo">Wczytaj dane demo</button>`)}
+    ${hasSchedule ? `<div class="note safe-note"><strong>Ta rozgrywka ma już własny terminarz.</strong> Format został zablokowany, aby przypadkowo nie usunąć meczów i wyników. Nową ligę lub turniej utwórz przyciskiem „+ Nowa rozgrywka”.</div>` : ''}
+    <div class="grid two" style="margin-top:${hasSchedule ? '16px' : '0'}">
       <section class="card">
-        <div class="section-head"><h2>Ustawienia rozgrywek</h2><span class="badge">${formatLabel(state.settings.format)}</span></div>
+        <div class="section-head"><h2>Ustawienia rozgrywki</h2><span class="badge">${formatLabel(state.settings.format)}</span></div>
         <form id="competitionForm" class="form-grid">
           <div class="field wide"><label>Nazwa ligi lub turnieju</label><input name="competitionName" maxlength="80" value="${esc(state.settings.competitionName)}" required></div>
-          <div class="field"><label>Format</label><select name="format">
+          <div class="field"><label>Format</label><select name="format" ${hasSchedule ? 'disabled' : ''}>
             <option value="league" ${state.settings.format==='league'?'selected':''}>Liga – każdy z każdym</option>
             <option value="groups" ${state.settings.format==='groups'?'selected':''}>Faza grupowa</option>
             <option value="knockout" ${state.settings.format==='knockout'?'selected':''}>Turniej pucharowy</option>
-          </select></div>
+          </select>${hasSchedule ? `<input type="hidden" name="format" value="${esc(state.settings.format)}"><small class="field-help">Format można zmieniać tylko przed wygenerowaniem terminarza.</small>` : ''}</div>
           <div class="field"><label>Punkty startowe</label><select name="startScore">${[301,501,701,1001].map(v=>`<option ${Number(state.settings.startScore)===v?'selected':''}>${v}</option>`).join('')}</select></div>
           <div class="field"><label>Wygrane legi do zwycięstwa</label><input type="number" name="legsToWin" min="1" max="15" value="${state.settings.legsToWin}"></div>
-          <div class="field"><label>Liczba grup</label><input type="number" name="groupsCount" min="2" max="12" value="${state.settings.groupsCount}" ${state.settings.format==='groups'?'':'disabled'}></div>
+          <div class="field"><label>Liczba grup</label><input type="number" name="groupsCount" min="2" max="12" value="${state.settings.groupsCount}" ${state.settings.format==='groups'&&!hasSchedule?'':'disabled'}>${state.settings.format==='groups'&&hasSchedule?`<input type="hidden" name="groupsCount" value="${state.settings.groupsCount}">`:''}</div>
           <div class="field"><label>Punkty za zwycięstwo</label><input type="number" name="pointsWin" min="0" max="10" value="${state.settings.pointsWin}"></div>
           <div class="field"><label>Punkty za remis</label><input type="number" name="pointsDraw" min="0" max="10" value="${state.settings.pointsDraw}"></div>
-          <div class="wide"><button class="btn primary" type="submit">Zapisz ustawienia</button></div>
+          <div class="wide row-actions"><button class="btn primary" type="submit">Zapisz ustawienia</button><button class="btn ghost" type="button" id="duplicateCurrentCompetition">Utwórz nową na podstawie tej</button></div>
         </form>
       </section>
       <section class="card">
@@ -406,11 +415,17 @@ function renderCompetition() {
       </section>
     </div>
     <section class="card accent" style="margin-top:16px">
-      <div class="section-head"><div><h2>Terminarz</h2><p class="muted">Obecnie: ${state.matches.filter(m=>!m.bye).length} meczów, ${state.matches.filter(m=>m.status==='completed'&&!m.bye).length} zakończonych.</p></div><div class="row-actions">
-        ${state.settings.format==='groups' ? '<button class="btn info" id="autoGroups">Rozdziel grupy</button>' : ''}
-        <button class="btn primary" id="generateSchedule" ${state.players.length<2?'disabled':''}>${state.matches.length ? 'Wygeneruj od nowa' : 'Generuj terminarz'}</button>
+      <div class="section-head"><div><h2>Terminarz tej rozgrywki</h2><p class="muted">Obecnie: ${state.matches.filter(m=>!m.bye).length} meczów, ${completedMatches} zakończonych.</p></div><div class="row-actions">
+        ${state.settings.format==='groups' && !hasSchedule ? '<button class="btn info" id="autoGroups">Rozdziel grupy</button>' : ''}
+        ${!hasSchedule
+          ? `<button class="btn primary" id="generateSchedule" ${state.players.length<2?'disabled':''}>Generuj terminarz</button>`
+          : `<button class="btn" disabled>Terminarz zapisany</button>${canRegenerate ? '<button class="btn danger" id="regenerateSchedule">Przebuduj zaplanowany terminarz</button>' : ''}<button class="btn info" data-new-competition>+ Nowa rozgrywka</button>`}
       </div></div>
-      <div class="note">Wygenerowanie terminarza od nowa usuwa dotychczasowe mecze i wyniki. Lista zawodników pozostaje bez zmian.</div>
+      ${!hasSchedule
+        ? '<div class="note">Wygenerowany terminarz zostanie zapisany tylko w tej rozgrywce. Inne ligi i turnieje nie zostaną zmienione.</div>'
+        : canRegenerate
+          ? '<div class="note">Możesz przebudować terminarz, ponieważ żaden mecz nie został jeszcze rozegrany. Wyniki innych rozgrywek pozostają bez zmian.</div>'
+          : '<div class="note safe-note">Terminarz zawiera rozpoczęte lub zakończone mecze, dlatego nie można go nadpisać. Utwórz nową rozgrywkę, aby zachować pełną historię.</div>'}
     </section>`;
 }
 
@@ -552,17 +567,20 @@ function scorePlayer(playerId, stats) {
 }
 
 function bindCurrentPage() {
-  $('#showNewCompetition')?.addEventListener('click', () => { const panel=$('#newCompetitionPanel'); if(panel){panel.hidden=false;panel.scrollIntoView({behavior:'smooth',block:'start'});setTimeout(()=>panel.querySelector('input')?.focus(),250);} });
-  $('#hideNewCompetition')?.addEventListener('click', () => { const panel=$('#newCompetitionPanel'); if(panel)panel.hidden=true; });
+  $('#showNewCompetition')?.addEventListener('click', openNewCompetitionCreator);
+  $('#hideNewCompetition')?.addEventListener('click', () => { newCompetitionPanelOpen=false; render(); });
   $('#newCompetitionForm')?.addEventListener('submit', createCompetition);
   $$('[data-competition-filter]').forEach(b=>b.addEventListener('click',()=>{competitionFilter=b.dataset.competitionFilter;render();}));
   $$('.open-competition').forEach(b=>b.addEventListener('click',()=>activateCompetition(b.dataset.id,'dashboard')));
   $$('.finish-competition').forEach(b=>b.addEventListener('click',()=>finishCompetition(b.dataset.id)));
   $$('.reopen-competition').forEach(b=>b.addEventListener('click',()=>reopenCompetition(b.dataset.id)));
+  $$('.duplicate-competition').forEach(b=>b.addEventListener('click',()=>duplicateCompetition(b.dataset.id)));
+  $('#duplicateCurrentCompetition')?.addEventListener('click',()=>duplicateCompetition(state.id));
   $('#resumeLive')?.addEventListener('click', () => { route='scorer'; render(); });
   $('#competitionForm')?.addEventListener('submit', saveCompetitionSettings);
   $('#playerForm')?.addEventListener('submit', addPlayer);
   $('#generateSchedule')?.addEventListener('click', generateSchedule);
+  $('#regenerateSchedule')?.addEventListener('click', regenerateSchedule);
   $('#autoGroups')?.addEventListener('click', autoAssignGroups);
   $('#loadDemo')?.addEventListener('click', loadDemo);
   $$('.delete-player').forEach(b=>b.addEventListener('click',()=>deletePlayer(b.dataset.id)));
@@ -584,6 +602,67 @@ function bindCurrentPage() {
   $('#installBtn')?.addEventListener('click', installApp);
 }
 
+function openNewCompetitionCreator() {
+  newCompetitionPanelOpen = true;
+  route = 'home';
+  render();
+  setTimeout(() => {
+    const panel = $('#newCompetitionPanel');
+    panel?.scrollIntoView({behavior:'smooth', block:'start'});
+    panel?.querySelector('input[name="competitionName"]')?.focus();
+  }, 120);
+}
+
+function clonedPlayers(players) {
+  const now = new Date().toISOString();
+  return (players || []).map(p => ({
+    id: uid('p'),
+    name: p.name,
+    group: p.group || '',
+    createdAt: now
+  }));
+}
+
+function duplicateCompetition(id) {
+  const source = hub.competitions.find(c => c.id === id);
+  if (!source) return;
+  saveState();
+  const competition = defaultCompetition({
+    settings: {
+      ...source.settings,
+      competitionName: `${source.settings.competitionName} – nowa rozgrywka`
+    },
+    players: clonedPlayers(source.players),
+    matches: [],
+    live: null,
+    status: 'active',
+    startedAt: new Date().toISOString()
+  });
+  hub.competitions.push(competition);
+  hub.activeCompetitionId = competition.id;
+  state = competition;
+  route = 'competition';
+  newCompetitionPanelOpen = false;
+  matchFilter = 'all';
+  tableGroup = 'all';
+  saveHub();
+  render();
+  toast('Utworzono nową, osobną rozgrywkę. Poprzednie wyniki pozostały zapisane.');
+}
+
+function settingsFromForm(data) {
+  return {
+    ...state.settings,
+    competitionName: String(data.get('competitionName') || '').trim() || 'Liga Darta',
+    format: String(data.get('format') || state.settings.format || 'league'),
+    startScore: Number(data.get('startScore')) || 501,
+    legsToWin: Math.max(1, Number(data.get('legsToWin')) || 2),
+    groupsCount: Math.max(2, Number(data.get('groupsCount')) || state.settings.groupsCount || 2),
+    pointsWin: Math.max(0, Number(data.get('pointsWin') ?? state.settings.pointsWin ?? 2)),
+    pointsDraw: Math.max(0, Number(data.get('pointsDraw') ?? state.settings.pointsDraw ?? 1))
+  };
+}
+
 function createCompetition(event) {
   event.preventDefault();
   const data = new FormData(event.currentTarget);
@@ -603,6 +682,7 @@ function createCompetition(event) {
   hub.activeCompetitionId = competition.id;
   state = competition;
   route = 'competition';
+  newCompetitionPanelOpen = false;
   matchFilter = 'all';
   tableGroup = 'all';
   saveHub();
@@ -646,22 +726,45 @@ function ensureCompetitionOpen() {
 }
 
 function saveCompetitionSettings(event) {
-  if (!ensureCompetitionOpen()) return;
   event.preventDefault();
+  if (!ensureCompetitionOpen()) return;
   const data = new FormData(event.currentTarget);
+  const requested = settingsFromForm(data);
   const oldFormat = state.settings.format;
-  state.settings.competitionName = String(data.get('competitionName')).trim() || 'Liga Darta';
-  state.settings.format = String(data.get('format'));
-  state.settings.startScore = Number(data.get('startScore')) || 501;
-  state.settings.legsToWin = Math.max(1, Number(data.get('legsToWin')) || 2);
-  state.settings.groupsCount = Math.max(2, Number(data.get('groupsCount')) || state.settings.groupsCount || 2);
-  state.settings.pointsWin = Math.max(0, Number(data.get('pointsWin')) || 0);
-  state.settings.pointsDraw = Math.max(0, Number(data.get('pointsDraw')) || 0);
-  if (oldFormat !== state.settings.format && state.matches.length && confirm('Zmiana formatu nie usuwa automatycznie terminarza. Usunąć obecne mecze i wyniki?')) {
-    state.matches = [];
-    state.live = null;
+
+  if (oldFormat !== requested.format && state.matches.length) {
+    const createNew = confirm('Ta rozgrywka ma już zapisany terminarz. Jej format nie zostanie zmieniony. Utworzyć NOWĄ, osobną rozgrywkę w wybranym formacie i skopiować zawodników?');
+    if (!createNew) {
+      render();
+      return toast('Obecna rozgrywka pozostała bez zmian');
+    }
+    saveState();
+    const competition = defaultCompetition({
+      settings: {
+        ...requested,
+        competitionName: requested.competitionName === state.settings.competitionName
+          ? `${requested.competitionName} – ${formatLabel(requested.format)}`
+          : requested.competitionName
+      },
+      players: clonedPlayers(state.players),
+      matches: [],
+      live: null,
+      status: 'active',
+      startedAt: new Date().toISOString()
+    });
+    hub.competitions.push(competition);
+    hub.activeCompetitionId = competition.id;
+    state = competition;
+    route = 'competition';
+    saveHub();
+    render();
+    return toast('Utworzono nową rozgrywkę. Poprzednia i jej wyniki zostały zachowane.');
   }
-  saveState(); render(); toast('Ustawienia zapisane');
+
+  state.settings = requested;
+  saveState();
+  render();
+  toast('Ustawienia zapisane');
 }
 
 function addPlayer(event) {
@@ -724,8 +827,29 @@ function autoAssignGroups() {
 function generateSchedule() {
   if (!ensureCompetitionOpen()) return;
   if (state.players.length < 2) return toast('Dodaj co najmniej dwóch zawodników');
-  if (state.matches.length && !confirm('Usunąć obecny terminarz i wszystkie wyniki?')) return;
-  state.matches=[]; state.live=null;
+  if (state.matches.length) return toast('Ta rozgrywka ma już terminarz. Utwórz nową rozgrywkę, aby zachować historię.');
+  buildSchedule();
+  saveState();
+  render();
+  toast('Terminarz zapisany w tej rozgrywce');
+}
+
+function regenerateSchedule() {
+  if (!ensureCompetitionOpen()) return;
+  const protectedMatches = state.matches.some(m => m.status === 'completed' || m.status === 'live') || Boolean(state.live);
+  if (protectedMatches) return toast('Nie można nadpisać terminarza z wynikami. Utwórz nową rozgrywkę.');
+  if (!confirm('Przebudować wyłącznie zaplanowany terminarz tej rozgrywki? Żadne inne ligi ani turnieje nie zostaną zmienione.')) return;
+  state.matches = [];
+  state.live = null;
+  buildSchedule();
+  saveState();
+  render();
+  toast('Zaplanowany terminarz został przebudowany');
+}
+
+function buildSchedule() {
+  state.matches = [];
+  state.live = null;
   if (state.settings.format === 'league') {
     state.matches = roundRobin(state.players.map(p=>p.id), null);
   } else if (state.settings.format === 'groups') {
@@ -737,7 +861,6 @@ function generateSchedule() {
   } else {
     createKnockoutRound(shuffle(state.players.map(p=>p.id)),1);
   }
-  saveState(); render(); toast('Terminarz wygenerowany');
 }
 
 function autoAssignGroupsSilent() {
@@ -1010,6 +1133,6 @@ async function installApp() {
 window.addEventListener('beforeinstallprompt',event=>{event.preventDefault();deferredInstallPrompt=event;updateInstallButton();});
 window.addEventListener('appinstalled',()=>{deferredInstallPrompt=null;toast('Aplikacja została zainstalowana');});
 
-if('serviceWorker' in navigator){window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js').catch(console.error));}
+if('serviceWorker' in navigator){window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js?v=1.1.1').catch(console.error));}
 
 render();

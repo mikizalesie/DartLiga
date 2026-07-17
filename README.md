@@ -1,87 +1,64 @@
-# 🎯 DartLiga PWA
+# 🎯 DartLiga PWA 1.1.1
 
-Responsywna aplikacja PWA do liczenia punktów i prowadzenia rozgrywek darta. Działa w przeglądarce, można ją zainstalować na telefonie lub komputerze, a po pierwszym uruchomieniu działa także offline.
+Aplikacja PWA do liczenia punktów w darcie oraz prowadzenia wielu niezależnych lig, faz grupowych i turniejów. Każda rozgrywka ma własnych zawodników, terminarz, wyniki, tabelę i statystyki.
 
-## Funkcje
+## Najważniejsze funkcje
 
 - licznik X01: 301, 501, 701 i 1001,
 - mecze do wybranej liczby wygranych legów,
 - kontrola BUST i cofanie ostatniej wizyty,
-- wiele równolegle prowadzonych lig, faz grupowych i turniejów pucharowych,
-- ekran „Moje rozgrywki” z aktywnymi i zakończonymi rozgrywkami,
-- niezależni zawodnicy, mecze, wyniki, statystyki i aktywny licznik dla każdej rozgrywki,
-- ręczne oznaczanie rozgrywki jako zakończonej oraz możliwość jej wznowienia,
+- liga „każdy z każdym”, faza grupowa i turniej pucharowy,
+- wiele równoległych rozgrywek,
+- archiwum rozgrywek aktywnych i zakończonych,
 - automatyczna tabela wyników i bilans legów,
 - statystyki: średnia 3-dart, 100+, 140+, 180, High Out i Best Leg,
 - ręczne wpisywanie wyników,
-- eksport i import całego archiwum rozgrywek w jednym pliku JSON,
+- eksport i import całego archiwum JSON,
 - zapis danych w `localStorage`,
 - instalacja jako PWA i działanie offline.
 
+## Bezpieczna obsługa wielu rozgrywek
+
+Wersja 1.1.1 oddziela pojęcie **rozgrywki** od jej **formatu**.
+
+- Nową ligę lub turniej tworzy się przyciskiem **+ Nowa rozgrywka**.
+- Wygenerowanie terminarza nie usuwa żadnej innej ligi ani turnieju.
+- Po utworzeniu terminarza format bieżącej rozgrywki jest blokowany, aby nie skasować wyników.
+- Przycisk **Nowa na podstawie** tworzy osobną rozgrywkę i kopiuje listę zawodników, ale nie kopiuje meczów ani wyników.
+- Terminarz z rozegranymi meczami nie może zostać nadpisany.
+
 ## Publikacja na GitHub Pages
 
-Repozytorium zawiera gotowy workflow `.github/workflows/deploy-pages.yml`. Po każdym wysłaniu zmian do gałęzi `main` aplikacja może publikować się automatycznie.
+Repozytorium zawiera workflow `.github/workflows/deploy-pages.yml`.
 
-### 1. Utwórz repozytorium
+1. Wgraj pliki do głównego katalogu repozytorium.
+2. Wejdź w **Settings → Pages**.
+3. Ustaw **Source: GitHub Actions**.
+4. Poczekaj na zielony status workflow **Publikacja DartLiga PWA** w zakładce **Actions**.
 
-Na GitHubie utwórz nowe repozytorium, na przykład:
-
-```text
-dartliga-pwa
-```
-
-Repozytorium może być publiczne. Nie zaznaczaj dodawania README, `.gitignore` ani licencji, ponieważ te pliki są już w paczce.
-
-### 2. Wgraj pliki
-
-Najprościej:
-
-1. Otwórz utworzone repozytorium.
-2. Kliknij **Add file → Upload files**.
-3. Przeciągnij całą zawartość tej paczki, łącznie z folderami `.github` oraz `icons`.
-4. Zapisz zmiany przyciskiem **Commit changes**.
-
-> Uwaga: folder `.github` jest ukryty w Windows. W Eksploratorze plików włącz **Widok → Pokaż → Ukryte elementy** albo użyj poniższych poleceń Git.
-
-### 3. Włącz GitHub Pages
-
-1. Wejdź w **Settings** repozytorium.
-2. W menu po lewej wybierz **Pages**.
-3. W sekcji **Build and deployment** ustaw **Source: GitHub Actions**.
-4. Otwórz zakładkę **Actions** i sprawdź workflow **Publikacja DartLiga PWA**.
-
-Po poprawnym wdrożeniu adres będzie miał postać:
+Adres aplikacji będzie miał postać:
 
 ```text
-https://TWOJ-LOGIN.github.io/dartliga-pwa/
+https://TWOJ-LOGIN.github.io/DartLiga/
 ```
 
-### 4. Aktualizowanie aplikacji
+## Aktualizacja istniejącej instalacji
 
-Każdy commit wysłany do gałęzi `main` uruchamia ponowną publikację. Service Worker ma własny numer cache, dlatego przy zmianach aplikacji warto zwiększyć wartość w `sw.js`, na przykład:
+Wgraj i nadpisz pliki:
 
-```js
-const CACHE = 'dartliga-pwa-v1.1.1';
+```text
+app.js
+styles.css
+index.html
+sw.js
+README.md
 ```
 
-## Wgrywanie przez Git
+Folder `.github` może pozostać bez zmian. Dane zapisane w przeglądarce są zachowywane, ponieważ klucz archiwum nie został zmieniony.
 
-W terminalu otwartym w folderze projektu wykonaj:
-
-```bash
-git init
-git add .
-git commit -m "Pierwsza wersja DartLiga PWA"
-git branch -M main
-git remote add origin https://github.com/TWOJ-LOGIN/dartliga-pwa.git
-git push -u origin main
-```
-
-Zastąp `TWOJ-LOGIN` swoim loginem GitHub.
+Po publikacji otwórz aplikację ponownie. W lewym dolnym rogu powinien być widoczny numer **1.1.1**. Pliki `app.js` i `styles.css` mają numer wersji w adresie, dzięki czemu aktualizacja nie powinna utknąć w starym cache PWA.
 
 ## Uruchomienie lokalne
-
-Service Worker wymaga `localhost` albo HTTPS. W folderze aplikacji uruchom:
 
 ```bash
 python -m http.server 8080
@@ -101,23 +78,13 @@ icons/                             ikony PWA
 index.html                         główny plik strony
 styles.css                         wygląd aplikacji
 app.js                             logika aplikacji
-manifest.webmanifest               konfiguracja instalacji PWA
-sw.js                              działanie offline
-.nojekyll                          wyłączenie przetwarzania Jekyll
+manifest.webmanifest               konfiguracja PWA
+sw.js                              cache i działanie offline
+.nojekyll                          wyłączenie Jekyll
 LICENSE                            licencja MIT
-README.md                          instrukcja projektu
+README.md                          instrukcja
 ```
 
-## Dane użytkownika
+## Przechowywanie danych
 
-Wersja 1.1.0 zapisuje całe archiwum rozgrywek lokalnie na konkretnym urządzeniu. Wyniki nie synchronizują się jeszcze automatycznie pomiędzy telefonami. Kopię można pobrać i przywrócić w zakładce **Ustawienia**.
-
-
-## Aktualizacja 1.1.0
-
-- dodano bibliotekę wielu rozgrywek podobną do listy turniejów n01,
-- utworzenie nowej ligi lub turnieju nie usuwa poprzednich danych,
-- kilka rozgrywek może jednocześnie mieć status „W trakcie”,
-- przełączanie rozgrywek zachowuje także rozpoczęty licznik meczu,
-- stare dane z wersji 1.0.1 są automatycznie przenoszone do pierwszej pozycji archiwum,
-- zakończone rozgrywki można przeglądać i ponownie wznowić.
+Dane są lokalne dla danej przeglądarki i urządzenia. Przed większą aktualizacją warto wejść w **Ustawienia** i wykonać eksport całego archiwum do pliku JSON.

@@ -1,7 +1,7 @@
 {
   "name": "DartLiga PWA",
   "short_name": "DartLiga",
-  "description": "Licznik punktów 501 oraz obsługa lig, grup i turniejów darta.",
+  "description": "Licznik punktów X01 z archiwum wielu lig, grup i turniejów darta.",
   "lang": "pl",
   "start_url": "./",
   "scope": "./",

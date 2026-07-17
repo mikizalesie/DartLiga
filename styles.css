@@ -65,3 +65,44 @@ hr{border:0;border-top:1px solid var(--line);margin:18px 0}.note{padding:12px 14
 .mobile-head{display:none}.mobile-nav{display:none}
 @media(max-width:1050px){.grid.stats{grid-template-columns:repeat(2,1fr)}.grid.three{grid-template-columns:1fr 1fr}.scoreboard{grid-template-columns:1fr 100px 1fr}.entry-panel{grid-template-columns:1fr}}
 @media(max-width:760px){.app-shell{display:block}.sidebar{display:none}.main{padding:18px 14px 90px}.mobile-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px}.mobile-head .brand{padding:0}.mobile-head .logo{width:38px;height:38px}.mobile-nav{display:grid;grid-template-columns:repeat(5,1fr);position:fixed;left:8px;right:8px;bottom:8px;background:rgba(16,24,39,.95);border:1px solid var(--line);border-radius:16px;padding:6px;z-index:20;backdrop-filter:blur(16px);box-shadow:var(--shadow)}.mobile-nav button{border:0;background:transparent;color:var(--muted);padding:8px 2px;border-radius:10px;font-size:10px;font-weight:800}.mobile-nav button span{display:block;font-size:18px;margin-bottom:2px}.mobile-nav button.active{background:var(--panel-3);color:#fff}.topbar{display:block}.top-actions{justify-content:flex-start;margin-top:14px}.grid.stats,.grid.two,.grid.three,.form-grid,.form-grid.cols-3{grid-template-columns:1fr}.scoreboard{grid-template-columns:1fr}.versus{min-height:76px;grid-template-columns:1fr 1fr}.score-player{padding:17px}.remaining{font-size:76px;margin:12px}.quick-grid{grid-template-columns:repeat(4,1fr)}.match-row{grid-template-columns:1fr}.match-row .row-actions{justify-content:flex-start}.entry-panel{grid-template-columns:1fr}.inline-form{display:grid}.inline-form .field{min-width:0}.hide-mobile{display:none}}
+
+[hidden]{display:none!important}
+.brand-button{width:100%;border:0;background:transparent;color:inherit;text-align:left;cursor:pointer}
+.brand-button:hover{background:rgba(255,255,255,.025);border-radius:14px}
+.active-competition-card{display:grid;gap:7px;margin:16px 4px 12px;padding:12px;border:1px solid var(--line);border-radius:14px;background:#0b1220}
+.active-competition-card strong{font-size:13px;line-height:1.35}
+.active-competition-card .muted{font-size:10px;text-transform:uppercase;letter-spacing:.08em;font-weight:900}
+.active-competition-card .badge{justify-self:start}
+.new-competition-panel{margin-bottom:16px;border-color:rgba(34,197,94,.4)}
+.competition-tabs{margin-top:4px}
+.competition-library{padding:0;overflow:hidden}
+.competition-list{display:grid}
+.competition-row{display:grid;grid-template-columns:175px minmax(0,1fr) auto;gap:18px;align-items:center;padding:18px 20px;border-bottom:1px solid var(--line);background:rgba(11,18,32,.54)}
+.competition-row:last-child{border-bottom:0}
+.competition-row:hover{background:rgba(32,43,64,.45)}
+.competition-row.selected{box-shadow:inset 4px 0 0 var(--info);background:rgba(56,189,248,.045)}
+.competition-date{display:grid;gap:3px;color:var(--muted);font-size:12px}
+.competition-date span{text-transform:uppercase;letter-spacing:.08em;font-size:10px;font-weight:900}
+.competition-date strong{color:#cbd5e1;font-size:13px}
+.competition-main{min-width:0}
+.competition-title-line{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.competition-title-line h3{font-size:19px;margin:0;overflow-wrap:anywhere}
+.competition-meta{display:flex;gap:8px 16px;flex-wrap:wrap;color:var(--muted);font-size:12px;margin-top:8px}
+.competition-meta span{position:relative}
+.competition-meta span+span::before{content:'•';position:absolute;left:-10px;color:#475569}
+.competition-actions{display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap}
+
+@media(max-width:1050px){
+  .competition-row{grid-template-columns:145px minmax(0,1fr)}
+  .competition-actions{grid-column:2;justify-content:flex-start}
+}
+@media(max-width:760px){
+  .brand-button{width:auto}
+  .competition-library{padding:0}
+  .competition-row{grid-template-columns:1fr;gap:10px;padding:16px}
+  .competition-actions{grid-column:auto;justify-content:flex-start}
+  .competition-date{display:flex;gap:8px;align-items:center}
+  .competition-meta span+span::before{display:none}
+  .competition-meta{gap:6px 12px}
+  .competition-title-line h3{font-size:17px}
+}

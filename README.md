@@ -7,11 +7,14 @@ Responsywna aplikacja PWA do liczenia punktów i prowadzenia rozgrywek darta. Dz
 - licznik X01: 301, 501, 701 i 1001,
 - mecze do wybranej liczby wygranych legów,
 - kontrola BUST i cofanie ostatniej wizyty,
-- liga „każdy z każdym”, faza grupowa i turniej pucharowy,
+- wiele równolegle prowadzonych lig, faz grupowych i turniejów pucharowych,
+- ekran „Moje rozgrywki” z aktywnymi i zakończonymi rozgrywkami,
+- niezależni zawodnicy, mecze, wyniki, statystyki i aktywny licznik dla każdej rozgrywki,
+- ręczne oznaczanie rozgrywki jako zakończonej oraz możliwość jej wznowienia,
 - automatyczna tabela wyników i bilans legów,
 - statystyki: średnia 3-dart, 100+, 140+, 180, High Out i Best Leg,
 - ręczne wpisywanie wyników,
-- eksport i import kopii JSON,
+- eksport i import całego archiwum rozgrywek w jednym pliku JSON,
 - zapis danych w `localStorage`,
 - instalacja jako PWA i działanie offline.
 
@@ -58,7 +61,7 @@ https://TWOJ-LOGIN.github.io/dartliga-pwa/
 Każdy commit wysłany do gałęzi `main` uruchamia ponowną publikację. Service Worker ma własny numer cache, dlatego przy zmianach aplikacji warto zwiększyć wartość w `sw.js`, na przykład:
 
 ```js
-const CACHE = 'dartliga-pwa-v1.0.2';
+const CACHE = 'dartliga-pwa-v1.1.1';
 ```
 
 ## Wgrywanie przez Git
@@ -107,4 +110,14 @@ README.md                          instrukcja projektu
 
 ## Dane użytkownika
 
-Wersja 1.0.1 zapisuje dane lokalnie na konkretnym urządzeniu. Wyniki nie synchronizują się jeszcze automatycznie pomiędzy telefonami. Kopię można pobrać i przywrócić w zakładce **Ustawienia**.
+Wersja 1.1.0 zapisuje całe archiwum rozgrywek lokalnie na konkretnym urządzeniu. Wyniki nie synchronizują się jeszcze automatycznie pomiędzy telefonami. Kopię można pobrać i przywrócić w zakładce **Ustawienia**.
+
+
+## Aktualizacja 1.1.0
+
+- dodano bibliotekę wielu rozgrywek podobną do listy turniejów n01,
+- utworzenie nowej ligi lub turnieju nie usuwa poprzednich danych,
+- kilka rozgrywek może jednocześnie mieć status „W trakcie”,
+- przełączanie rozgrywek zachowuje także rozpoczęty licznik meczu,
+- stare dane z wersji 1.0.1 są automatycznie przenoszone do pierwszej pozycji archiwum,
+- zakończone rozgrywki można przeglądać i ponownie wznowić.

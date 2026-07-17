@@ -1,22 +1,27 @@
 'use strict';
 
-const STORAGE_KEY = 'dartliga_pwa_state_v1';
-const APP_VERSION = '1.0.1';
-let route = 'dashboard';
+const LEGACY_STORAGE_KEY = 'dartliga_pwa_state_v1';
+const STORAGE_KEY = 'dartliga_pwa_hub_v2';
+const APP_VERSION = '1.1.0';
+let route = 'home';
 let matchFilter = 'all';
 let tableGroup = 'all';
+let competitionFilter = 'all';
 let deferredInstallPrompt = null;
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const uid = (prefix = 'id') => `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 const clone = value => JSON.parse(JSON.stringify(value));
-const esc = value => String(value ?? '').replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
+const esc = value => String(value ?? '').replace(/[&<>'\"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','\"':'&quot;'}[c]));
 const fmt = n => Number.isFinite(Number(n)) ? Number(n).toFixed(2) : '0.00';
 
-function defaultState() {
-  return {
+function defaultCompetition(overrides = {}) {
+  const now = new Date().toISOString();
+  const base = {
+    id: uid('c'),
     version: APP_VERSION,
+    status: 'active',
     settings: {
       competitionName: 'Lokalna Liga Darta',
       format: 'league',
@@ -31,35 +36,115 @@ function defaultState() {
     players: [],
     matches: [],
     live: null,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString()
+    startedAt: now,
+    completedAt: null,
+    createdAt: now,
+    updatedAt: now
+  };
+  return {
+    ...base,
+    ...overrides,
+    settings: {...base.settings, ...(overrides.settings || {})},
+    players: Array.isArray(overrides.players) ? overrides.players : base.players,
+    matches: Array.isArray(overrides.matches) ? overrides.matches : base.matches,
+    live: overrides.live || null
   };
 }
 
-function loadState() {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return defaultState();
-    const parsed = JSON.parse(raw);
-    return {
-      ...defaultState(),
-      ...parsed,
-      settings: {...defaultState().settings, ...(parsed.settings || {})},
-      players: Array.isArray(parsed.players) ? parsed.players : [],
-      matches: Array.isArray(parsed.matches) ? parsed.matches : [],
-      live: parsed.live || null
-    };
-  } catch (error) {
-    console.error(error);
-    return defaultState();
-  }
+function defaultHub() {
+  const competition = defaultCompetition();
+  return {
+    version: APP_VERSION,
+    activeCompetitionId: competition.id,
+    competitions: [competition],
+    createdAt: competition.createdAt,
+    updatedAt: competition.updatedAt
+  };
 }
 
-let state = loadState();
+function normalizeCompetition(value = {}) {
+  return defaultCompetition({
+    ...value,
+    id: value.id || uid('c'),
+    status: value.status || 'active',
+    startedAt: value.startedAt || value.createdAt || new Date().toISOString(),
+    completedAt: value.completedAt || null,
+    settings: value.settings || {},
+    players: Array.isArray(value.players) ? value.players : [],
+    matches: Array.isArray(value.matches) ? value.matches : [],
+    live: value.live || null
+  });
+}
+
+function loadHub() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      const competitions = Array.isArray(parsed.competitions) ? parsed.competitions.map(normalizeCompetition) : [];
+      if (competitions.length) {
+        const activeCompetitionId = competitions.some(c => c.id === parsed.activeCompetitionId)
+          ? parsed.activeCompetitionId
+          : competitions[0].id;
+        return {
+          ...parsed,
+          version: APP_VERSION,
+          activeCompetitionId,
+          competitions
+        };
+      }
+    }
+
+    const legacyRaw = localStorage.getItem(LEGACY_STORAGE_KEY);
+    if (legacyRaw) {
+      const legacy = JSON.parse(legacyRaw);
+      const competition = normalizeCompetition(legacy);
+      return {
+        version: APP_VERSION,
+        activeCompetitionId: competition.id,
+        competitions: [competition],
+        createdAt: competition.createdAt,
+        updatedAt: new Date().toISOString()
+      };
+    }
+  } catch (error) {
+    console.error(error);
+  }
+  return defaultHub();
+}
+
+let hub = loadHub();
+let state = hub.competitions.find(c => c.id === hub.activeCompetitionId) || hub.competitions[0];
+
+function saveHub() {
+  hub.version = APP_VERSION;
+  hub.updatedAt = new Date().toISOString();
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(hub));
+}
+
+saveHub();
 
 function saveState() {
+  state.version = APP_VERSION;
   state.updatedAt = new Date().toISOString();
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  const index = hub.competitions.findIndex(c => c.id === state.id);
+  if (index >= 0) hub.competitions[index] = state;
+  else hub.competitions.push(state);
+  hub.activeCompetitionId = state.id;
+  saveHub();
+}
+
+function activateCompetition(id, targetRoute = 'dashboard') {
+  const target = hub.competitions.find(c => c.id === id);
+  if (!target) return;
+  saveState();
+  hub.activeCompetitionId = id;
+  state = target;
+  matchFilter = 'all';
+  tableGroup = 'all';
+  route = targetRoute;
+  saveHub();
+  render();
 }
 
 function toast(message) {
@@ -89,6 +174,46 @@ function statusBadge(status) {
   return '<span class="badge blue">Zaplanowany</span>';
 }
 
+function competitionState(competition) {
+  if (competition.status === 'completed') return 'completed';
+  if (competition.live || competition.matches?.some(m => m.status === 'live')) return 'live';
+  if (competition.matches?.length || competition.players?.length) return 'active';
+  return 'draft';
+}
+
+function competitionStatusBadge(competition) {
+  const status = competitionState(competition);
+  if (status === 'completed') return '<span class="badge green">Zakończona</span>';
+  if (status === 'live') return '<span class="badge red">Mecz w trakcie</span>';
+  if (status === 'active') return '<span class="badge yellow">W trakcie</span>';
+  return '<span class="badge blue">Przygotowanie</span>';
+}
+
+function formatDateTime(value) {
+  if (!value) return '—';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '—';
+  return new Intl.DateTimeFormat('pl-PL', {dateStyle:'medium', timeStyle:'short'}).format(date);
+}
+
+function localDateTimeValue(date = new Date()) {
+  const shifted = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
+  return shifted.toISOString().slice(0,16);
+}
+
+function competitionNumbers(competition) {
+  const matches = (competition.matches || []).filter(m => !m.bye);
+  const completed = matches.filter(m => m.status === 'completed').length;
+  const totalScore = matches.reduce((sum,m) => sum + Object.values(m.stats || {}).reduce((s,stats) => s + Number(stats.totalScore || 0),0),0);
+  const totalDarts = matches.reduce((sum,m) => sum + Object.values(m.stats || {}).reduce((s,stats) => s + Number(stats.totalDarts || 0),0),0);
+  return {
+    players: (competition.players || []).length,
+    matches: matches.length,
+    completed,
+    average: totalDarts ? totalScore / totalDarts * 3 : 0
+  };
+}
+
 function navButton(id, icon, label) {
   const activeRoute = route === 'scorer' ? 'matches' : route;
   return `<button data-route="${id}" class="${activeRoute === id ? 'active' : ''}"><span class="ico">${icon}</span>${label}</button>`;
@@ -99,15 +224,21 @@ function render() {
   app.innerHTML = `
     <div class="app-shell">
       <aside class="sidebar">
-        <div class="brand"><div class="logo"></div><div><strong>DartLiga</strong><small>PWA · offline</small></div></div>
+        <button class="brand brand-button" data-route="home"><div class="logo"></div><div><strong>DartLiga</strong><small>${hub.competitions.length} zapisanych rozgrywek</small></div></button>
         <nav class="nav">
-          ${navButton('dashboard','⌂','Pulpit')}
-          ${navButton('competition','♟','Rozgrywki')}
+          ${navButton('home','☷','Moje rozgrywki')}
+          ${navButton('dashboard','⌂','Pulpit aktywnej')}
+          ${navButton('competition','♟','Konfiguracja')}
           ${navButton('matches','◉','Mecze')}
           ${navButton('tables','▦','Tabele')}
           ${navButton('stats','↗','Statystyki')}
           ${navButton('settings','⚙','Ustawienia')}
         </nav>
+        <div class="active-competition-card">
+          <span class="muted">Aktywna rozgrywka</span>
+          <strong>${esc(state.settings.competitionName)}</strong>
+          ${competitionStatusBadge(state)}
+        </div>
         <div class="sidebar-footer">
           <button id="installBtn" class="btn primary" style="display:none">Zainstaluj aplikację</button>
           <span class="muted" style="font-size:11px;text-align:center">Wersja ${APP_VERSION}</span>
@@ -115,14 +246,14 @@ function render() {
       </aside>
       <main class="main">
         <div class="mobile-head">
-          <div class="brand"><div class="logo"></div><div><strong>DartLiga</strong><small>${esc(state.settings.competitionName)}</small></div></div>
+          <button class="brand brand-button" data-route="home"><div class="logo"></div><div><strong>DartLiga</strong><small>${esc(state.settings.competitionName)}</small></div></button>
           <button class="btn small" data-route="settings">⚙</button>
         </div>
         ${renderRoute()}
       </main>
       <nav class="mobile-nav">
+        ${mobileNav('home','☷','Rozgrywki')}
         ${mobileNav('dashboard','⌂','Pulpit')}
-        ${mobileNav('competition','♟','Liga')}
         ${mobileNav('matches','◉','Mecze')}
         ${mobileNav('tables','▦','Tabela')}
         ${mobileNav('stats','↗','Stat.')}
@@ -144,6 +275,7 @@ function mobileNav(id, icon, label) {
 
 function renderRoute() {
   switch (route) {
+    case 'home': return renderHome();
     case 'competition': return renderCompetition();
     case 'matches': return renderMatches();
     case 'tables': return renderTables();
@@ -158,6 +290,50 @@ function pageHeader(eyebrow, title, subtitle, actions = '') {
   return `<div class="topbar"><div><div class="eyebrow">${eyebrow}</div><h1>${title}</h1><p class="subtitle">${subtitle}</p></div><div class="top-actions">${actions}</div></div>`;
 }
 
+function renderHome() {
+  const filters = [
+    ['all','Wszystkie'],
+    ['active','W trakcie'],
+    ['completed','Zakończone']
+  ];
+  let competitions = hub.competitions.slice().sort((a,b) => String(b.startedAt || b.createdAt).localeCompare(String(a.startedAt || a.createdAt)));
+  if (competitionFilter === 'active') competitions = competitions.filter(c => competitionState(c) !== 'completed');
+  if (competitionFilter === 'completed') competitions = competitions.filter(c => competitionState(c) === 'completed');
+  return `
+    ${pageHeader('Archiwum i aktywne sezony', 'Moje rozgrywki', 'Możesz równolegle prowadzić kilka lig, grup i turniejów. Każda rozgrywka zachowuje własnych zawodników, mecze, wyniki i statystyki.', `<button class="btn primary" id="showNewCompetition">+ Nowa rozgrywka</button>`)}
+    <section class="card new-competition-panel" id="newCompetitionPanel" hidden>
+      <div class="section-head"><div><h2>Utwórz nową rozgrywkę</h2><p class="muted">Obecne i zakończone rozgrywki pozostaną zapisane.</p></div><button class="btn small ghost" id="hideNewCompetition">Zamknij</button></div>
+      <form id="newCompetitionForm" class="form-grid cols-3">
+        <div class="field"><label>Nazwa</label><input name="competitionName" maxlength="80" placeholder="np. Liga Jesienna 2027" required></div>
+        <div class="field"><label>Format</label><select name="format"><option value="league">Liga – każdy z każdym</option><option value="groups">Faza grupowa</option><option value="knockout">Turniej pucharowy</option></select></div>
+        <div class="field"><label>Data rozpoczęcia</label><input type="datetime-local" name="startedAt" value="${localDateTimeValue()}"></div>
+        <div class="wide"><button class="btn primary" type="submit">Utwórz i przejdź do konfiguracji</button></div>
+      </form>
+    </section>
+    <div class="tabs competition-tabs">${filters.map(([id,label])=>`<button class="tab ${competitionFilter===id?'active':''}" data-competition-filter="${id}">${label} <span class="muted">${id==='all'?hub.competitions.length:hub.competitions.filter(c=>id==='completed'?competitionState(c)==='completed':competitionState(c)!=='completed').length}</span></button>`).join('')}</div>
+    <section class="card competition-library">
+      ${competitions.length ? `<div class="competition-list">${competitions.map(competitionRow).join('')}</div>` : empty('Brak rozgrywek w tym widoku','Utwórz nową ligę albo zmień filtr.')}
+    </section>`;
+}
+
+function competitionRow(competition) {
+  const numbers = competitionNumbers(competition);
+  const active = competition.id === state.id;
+  return `<article class="competition-row ${active?'selected':''}">
+    <div class="competition-date"><span>Start</span><strong>${formatDateTime(competition.startedAt || competition.createdAt)}</strong></div>
+    <div class="competition-main">
+      <div class="competition-title-line"><h3>${esc(competition.settings?.competitionName || 'Rozgrywka bez nazwy')}</h3>${competitionStatusBadge(competition)}${active?'<span class="badge blue">Aktualnie otwarta</span>':''}</div>
+      <div class="competition-meta"><span>${formatLabel(competition.settings?.format)}</span><span>${numbers.players} zawodników</span><span>${numbers.completed}/${numbers.matches} meczów</span>${numbers.average?`<span>Śr. ${fmt(numbers.average)}</span>`:''}</div>
+    </div>
+    <div class="competition-actions">
+      <button class="btn small primary open-competition" data-id="${competition.id}">${active?'Otwórz pulpit':'Przełącz i otwórz'}</button>
+      ${competition.status === 'completed'
+        ? `<button class="btn small ghost reopen-competition" data-id="${competition.id}">Wznów</button>`
+        : `<button class="btn small ghost finish-competition" data-id="${competition.id}">Zakończ</button>`}
+    </div>
+  </article>`;
+}
+
 function renderDashboard() {
   const completed = state.matches.filter(m => m.status === 'completed' && !m.bye);
   const planned = state.matches.filter(m => m.status === 'planned');
@@ -167,7 +343,7 @@ function renderDashboard() {
   const recent = completed.slice().sort((a,b) => (b.completedAt || '').localeCompare(a.completedAt || '')).slice(0, 5);
   const next = planned.slice(0, 5);
   return `
-    ${pageHeader('Centrum rozgrywek', esc(state.settings.competitionName), `${formatLabel(state.settings.format)} · ${state.settings.startScore} · do ${state.settings.legsToWin} wygranych legów`, `<button class="btn primary" data-route="matches">Rozpocznij mecz</button>`)}
+    ${pageHeader('Centrum rozgrywek', esc(state.settings.competitionName), `${formatLabel(state.settings.format)} · ${state.settings.startScore} · do ${state.settings.legsToWin} wygranych legów · start ${formatDateTime(state.startedAt)}`, `<button class="btn ghost" data-route="home">Wszystkie rozgrywki</button><button class="btn primary" data-route="matches">Rozpocznij mecz</button>`)}
     <div class="grid stats">
       ${statCard('Zawodnicy', state.players.length, 'aktywnych w rozgrywkach')}
       ${statCard('Mecze zakończone', completed.length, `z ${state.matches.filter(m=>!m.bye).length} zaplanowanych`)}
@@ -324,12 +500,12 @@ function renderStats() {
 
 function renderSettings() {
   return `
-    ${pageHeader('Dane aplikacji', 'Ustawienia i kopia zapasowa', 'Dane są zapisywane lokalnie w tej przeglądarce. Eksport JSON pozwala przenieść ligę na inne urządzenie.')}
+    ${pageHeader('Dane aplikacji', 'Ustawienia i kopia zapasowa', 'Dane są zapisywane lokalnie w tej przeglądarce. Eksport JSON obejmuje całe archiwum lig i turniejów.')}
     <div class="grid two">
-      <section class="card"><h2>Kopia danych</h2><p class="muted">Eksport obejmuje ustawienia, zawodników, terminarz, wyniki i statystyki.</p><div class="row-actions"><button class="btn primary" id="exportData">Eksportuj JSON</button><label class="btn info" for="importData">Importuj JSON</label><input id="importData" type="file" accept="application/json" hidden></div></section>
+      <section class="card"><h2>Kopia danych</h2><p class="muted">Eksport obejmuje wszystkie aktywne i zakończone rozgrywki, zawodników, terminarze, wyniki i statystyki.</p><div class="row-actions"><button class="btn primary" id="exportData">Eksportuj JSON</button><label class="btn info" for="importData">Importuj JSON</label><input id="importData" type="file" accept="application/json" hidden></div></section>
       <section class="card"><h2>Instalacja PWA</h2><p class="muted">Po uruchomieniu przez HTTPS lub lokalny serwer aplikacja może działać jak program i zachować podstawowe pliki offline.</p><button class="btn primary" id="installBtnPage" ${deferredInstallPrompt?'':'disabled'}>Zainstaluj aplikację</button></section>
     </div>
-    <section class="card danger-zone" style="margin-top:16px"><h2 class="red">Strefa niebezpieczna</h2><p class="muted">Usunięcie danych jest nieodwracalne, chyba że wcześniej wykonano eksport JSON.</p><button class="btn danger" id="resetAll">Usuń wszystkie dane</button></section>`;
+    <section class="card danger-zone" style="margin-top:16px"><h2 class="red">Strefa niebezpieczna</h2><p class="muted">Usunięcie danych kasuje całe archiwum wszystkich rozgrywek i jest nieodwracalne, chyba że wcześniej wykonano eksport JSON.</p><button class="btn danger" id="resetAll">Usuń całe archiwum</button></section>`;
 }
 
 function renderScorer() {
@@ -376,6 +552,13 @@ function scorePlayer(playerId, stats) {
 }
 
 function bindCurrentPage() {
+  $('#showNewCompetition')?.addEventListener('click', () => { const panel=$('#newCompetitionPanel'); if(panel){panel.hidden=false;panel.scrollIntoView({behavior:'smooth',block:'start'});setTimeout(()=>panel.querySelector('input')?.focus(),250);} });
+  $('#hideNewCompetition')?.addEventListener('click', () => { const panel=$('#newCompetitionPanel'); if(panel)panel.hidden=true; });
+  $('#newCompetitionForm')?.addEventListener('submit', createCompetition);
+  $$('[data-competition-filter]').forEach(b=>b.addEventListener('click',()=>{competitionFilter=b.dataset.competitionFilter;render();}));
+  $$('.open-competition').forEach(b=>b.addEventListener('click',()=>activateCompetition(b.dataset.id,'dashboard')));
+  $$('.finish-competition').forEach(b=>b.addEventListener('click',()=>finishCompetition(b.dataset.id)));
+  $$('.reopen-competition').forEach(b=>b.addEventListener('click',()=>reopenCompetition(b.dataset.id)));
   $('#resumeLive')?.addEventListener('click', () => { route='scorer'; render(); });
   $('#competitionForm')?.addEventListener('submit', saveCompetitionSettings);
   $('#playerForm')?.addEventListener('submit', addPlayer);
@@ -401,7 +584,69 @@ function bindCurrentPage() {
   $('#installBtn')?.addEventListener('click', installApp);
 }
 
+function createCompetition(event) {
+  event.preventDefault();
+  const data = new FormData(event.currentTarget);
+  const name = String(data.get('competitionName') || '').trim();
+  if (!name) return toast('Podaj nazwę rozgrywki');
+  const startedRaw = String(data.get('startedAt') || '');
+  const startedDate = startedRaw ? new Date(startedRaw) : new Date();
+  const competition = defaultCompetition({
+    settings: {
+      competitionName: name,
+      format: String(data.get('format') || 'league')
+    },
+    startedAt: Number.isNaN(startedDate.getTime()) ? new Date().toISOString() : startedDate.toISOString()
+  });
+  saveState();
+  hub.competitions.push(competition);
+  hub.activeCompetitionId = competition.id;
+  state = competition;
+  route = 'competition';
+  matchFilter = 'all';
+  tableGroup = 'all';
+  saveHub();
+  render();
+  toast('Nowa rozgrywka utworzona');
+}
+
+function finishCompetition(id) {
+  const competition = hub.competitions.find(c => c.id === id);
+  if (!competition) return;
+  if (competition.live && !confirm('W tej rozgrywce jest rozpoczęty mecz. Zakończyć rozgrywkę bez usuwania zapisanego meczu?')) return;
+  if (!competition.live && !confirm(`Oznaczyć „${competition.settings.competitionName}” jako zakończoną? Wszystkie wyniki pozostaną w archiwum.`)) return;
+  competition.status = 'completed';
+  competition.completedAt = new Date().toISOString();
+  competition.updatedAt = competition.completedAt;
+  if (competition.id === state.id) state = competition;
+  saveHub();
+  render();
+  toast('Rozgrywka przeniesiona do zakończonych');
+}
+
+function reopenCompetition(id) {
+  const competition = hub.competitions.find(c => c.id === id);
+  if (!competition) return;
+  competition.status = 'active';
+  competition.completedAt = null;
+  competition.updatedAt = new Date().toISOString();
+  if (competition.id === state.id) state = competition;
+  saveHub();
+  render();
+  toast('Rozgrywka została wznowiona');
+}
+
+function ensureCompetitionOpen() {
+  if (state.status !== 'completed') return true;
+  if (!confirm('Ta rozgrywka jest oznaczona jako zakończona. Wznowić ją, aby wprowadzić zmiany?')) return false;
+  state.status = 'active';
+  state.completedAt = null;
+  saveState();
+  return true;
+}
+
 function saveCompetitionSettings(event) {
+  if (!ensureCompetitionOpen()) return;
   event.preventDefault();
   const data = new FormData(event.currentTarget);
   const oldFormat = state.settings.format;
@@ -420,6 +665,7 @@ function saveCompetitionSettings(event) {
 }
 
 function addPlayer(event) {
+  if (!ensureCompetitionOpen()) return;
   event.preventDefault();
   const data = new FormData(event.currentTarget);
   const name = String(data.get('playerName')).trim();
@@ -430,6 +676,7 @@ function addPlayer(event) {
 }
 
 function editPlayer(id) {
+  if (!ensureCompetitionOpen()) return;
   const p = player(id); if (!p) return;
   const name = prompt('Nowa nazwa zawodnika:', p.name);
   if (name === null) return;
@@ -440,6 +687,7 @@ function editPlayer(id) {
 }
 
 function deletePlayer(id) {
+  if (!ensureCompetitionOpen()) return;
   const p = player(id); if (!p) return;
   const related = state.matches.filter(m=>m.playerA===id||m.playerB===id).length;
   if (!confirm(`Usunąć zawodnika „${p.name}”?${related ? ' Powiązane mecze także zostaną usunięte.' : ''}`)) return;
@@ -450,6 +698,7 @@ function deletePlayer(id) {
 }
 
 function changePlayerGroup(id, group) {
+  if (!ensureCompetitionOpen()) return;
   const p = player(id); if (!p) return;
   p.group = group;
   saveState();
@@ -464,6 +713,7 @@ function groupNamesFromPlayers() {
 }
 
 function autoAssignGroups() {
+  if (!ensureCompetitionOpen()) return;
   if (!state.players.length) return;
   const groups = groupNames();
   const shuffled = shuffle(state.players.slice());
@@ -472,6 +722,7 @@ function autoAssignGroups() {
 }
 
 function generateSchedule() {
+  if (!ensureCompetitionOpen()) return;
   if (state.players.length < 2) return toast('Dodaj co najmniej dwóch zawodników');
   if (state.matches.length && !confirm('Usunąć obecny terminarz i wszystkie wyniki?')) return;
   state.matches=[]; state.live=null;
@@ -551,6 +802,7 @@ function shuffle(array) {
 }
 
 function startMatch(id) {
+  if (!ensureCompetitionOpen()) return;
   const match=state.matches.find(m=>m.id===id); if(!match) return;
   if(state.live && state.live.matchId!==id && !confirm('Inny mecz jest rozpoczęty. Zastąpić go nowym meczem?')) return;
   if(!state.live || state.live.matchId!==id) state.live=createLive(match);
@@ -568,6 +820,7 @@ function createLive(match) {
 }
 
 function manualResult(id) {
+  if (!ensureCompetitionOpen()) return;
   const match=state.matches.find(m=>m.id===id); if(!match) return;
   const a=prompt(`Liczba legów: ${playerName(match.playerA)}`, String(match.legsA||0)); if(a===null)return;
   const b=prompt(`Liczba legów: ${playerName(match.playerB)}`, String(match.legsB||0)); if(b===null)return;
@@ -580,6 +833,7 @@ function manualResult(id) {
 }
 
 function reopenMatch(id) {
+  if (!ensureCompetitionOpen()) return;
   const match=state.matches.find(m=>m.id===id); if(!match)return;
   if(!confirm('Usunąć wynik i ponownie otworzyć mecz?'))return;
   if(state.settings.format==='knockout'){
@@ -696,8 +950,11 @@ function computePlayerStats() {
 function signed(value) { return value>0?`+${value}`:String(value); }
 
 function loadDemo() {
-  if((state.players.length||state.matches.length)&&!confirm('Dane demo zastąpią obecną listę zawodników i wyniki. Kontynuować?'))return;
-  state=defaultState();
+  if((state.players.length||state.matches.length)&&!confirm('Dane demo zastąpią tylko aktualnie otwartą rozgrywkę. Pozostałe ligi i turnieje pozostaną bez zmian. Kontynuować?'))return;
+  const currentId = state.id;
+  const currentCreatedAt = state.createdAt;
+  const currentStartedAt = state.startedAt;
+  state = defaultCompetition({id:currentId,createdAt:currentCreatedAt,startedAt:currentStartedAt,status:'active'});
   state.settings.competitionName='Piątkowa Liga Darta';state.settings.format='league';
   ['Michał','Andrzej','Kamil','Piotr','Łukasz','Tomasz'].forEach(name=>state.players.push({id:uid('p'),name,group:'',createdAt:new Date().toISOString()}));
   state.matches=roundRobin(state.players.map(p=>p.id),null);
@@ -706,23 +963,39 @@ function loadDemo() {
     [m.playerA]:{totalScore:1350+i*30,totalDarts:75+i*3,average:54,h100:3+i,h140:1,h180:i===0?1:0,highOut:72+i*4,bestLeg:21+i},
     [m.playerB]:{totalScore:1190+i*25,totalDarts:78+i*3,average:45.7,h100:2,h140:i%2,h180:0,highOut:56+i*3,bestLeg:24+i}
   };});
-  saveState();render();toast('Dane demo wczytane');
+  saveState();render();toast('Dane demo wczytane do aktualnej rozgrywki');
 }
 
 function exportData() {
-  const blob=new Blob([JSON.stringify(state,null,2)],{type:'application/json'});
-  const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=`dartliga-${new Date().toISOString().slice(0,10)}.json`;a.click();URL.revokeObjectURL(url);toast('Kopia danych pobrana');
+  saveState();
+  const blob=new Blob([JSON.stringify(hub,null,2)],{type:'application/json'});
+  const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=`dartliga-archiwum-${new Date().toISOString().slice(0,10)}.json`;a.click();URL.revokeObjectURL(url);toast('Kopia całego archiwum pobrana');
 }
 
 function importData(event) {
   const file=event.target.files?.[0];if(!file)return;
-  const reader=new FileReader();reader.onload=()=>{try{const imported=JSON.parse(reader.result);if(!imported.settings||!Array.isArray(imported.players)||!Array.isArray(imported.matches))throw new Error('format');if(!confirm('Import zastąpi wszystkie obecne dane. Kontynuować?'))return;state={...defaultState(),...imported,settings:{...defaultState().settings,...imported.settings}};saveState();route='dashboard';render();toast('Dane zaimportowane');}catch(e){toast('Nieprawidłowy plik kopii');}};reader.readAsText(file);
+  const reader=new FileReader();reader.onload=()=>{try{
+    const imported=JSON.parse(reader.result);
+    let nextHub;
+    if(Array.isArray(imported.competitions)){
+      const competitions=imported.competitions.map(normalizeCompetition);
+      if(!competitions.length)throw new Error('format');
+      nextHub={...imported,version:APP_VERSION,competitions,activeCompetitionId:competitions.some(c=>c.id===imported.activeCompetitionId)?imported.activeCompetitionId:competitions[0].id};
+    }else if(imported.settings&&Array.isArray(imported.players)&&Array.isArray(imported.matches)){
+      const competition=normalizeCompetition(imported);
+      nextHub={version:APP_VERSION,activeCompetitionId:competition.id,competitions:[competition],createdAt:competition.createdAt,updatedAt:new Date().toISOString()};
+    }else throw new Error('format');
+    if(!confirm('Import zastąpi całe obecne archiwum rozgrywek. Kontynuować?'))return;
+    hub=nextHub;
+    state=hub.competitions.find(c=>c.id===hub.activeCompetitionId)||hub.competitions[0];
+    saveHub();route='home';render();toast('Archiwum danych zaimportowane');
+  }catch(e){console.error(e);toast('Nieprawidłowy plik kopii');}};reader.readAsText(file);
 }
 
 function resetAll() {
-  if(!confirm('Usunąć wszystkie ustawienia, zawodników i wyniki?'))return;
+  if(!confirm('Usunąć całe archiwum: wszystkie ligi, turnieje, zawodników i wyniki?'))return;
   if(!confirm('To ostatnie potwierdzenie. Tej operacji nie można cofnąć.'))return;
-  state=defaultState();saveState();route='dashboard';render();toast('Dane usunięte');
+  hub=defaultHub();state=hub.competitions[0];saveHub();route='home';render();toast('Całe archiwum zostało usunięte');
 }
 
 function updateInstallButton() {

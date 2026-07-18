@@ -1,10 +1,16 @@
-# 🎯 DartLiga PWA 1.2.0
+# 🎯 DartLiga PWA 1.3.0
 
 Aplikacja PWA do liczenia punktów w darcie oraz prowadzenia wielu niezależnych lig, turniejów i rozgrywek grupowych połączonych z automatyczną fazą pucharową.
 
 ## Najważniejsze funkcje
 
 - licznik X01: 301, 501, 701 i 1001,
+- wprowadzanie wyniku lotka po lotce: numer 1–20 oraz Singiel, Double lub Triple,
+- osobne przyciski Outer Bull 25, Bull 50 i Pudło,
+- automatyczne sumowanie wizyty i liczby użytych lotek,
+- podpowiedzi checkout aktualizowane po każdej wybranej lotce,
+- kontrola zakończenia lega na double lub Bull 50,
+- zapis notacji rzutów, np. `T20 · T19 · D12`, w historii wizyt,
 - wiele równoległych i archiwalnych rozgrywek,
 - liga „każdy z każdym”,
 - samodzielny turniej pucharowy,
@@ -58,7 +64,7 @@ https://TWOJ-LOGIN.github.io/DartLiga/
 
 Wgraj i nadpisz pliki z paczki aktualizacyjnej. Folder `.github` nie wymaga zmiany. Dane zapisane w przeglądarce zostają zachowane.
 
-Po publikacji sprawdź numer **1.2.0** w lewym dolnym rogu aplikacji. W razie wyświetlania starej wersji wykonaj `Ctrl + F5` albo zamknij i ponownie uruchom zainstalowaną aplikację PWA.
+Po publikacji sprawdź numer **1.3.0** w lewym dolnym rogu aplikacji. W razie wyświetlania starej wersji wykonaj `Ctrl + F5` albo zamknij i ponownie uruchom zainstalowaną aplikację PWA.
 
 ## Uruchomienie lokalne
 

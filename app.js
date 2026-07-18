@@ -2,7 +2,7 @@
 
 const LEGACY_STORAGE_KEY = 'dartliga_pwa_state_v1';
 const STORAGE_KEY = 'dartliga_pwa_hub_v2';
-const APP_VERSION = '1.2.0';
+const APP_VERSION = '1.3.0';
 let route = 'home';
 let matchFilter = 'all';
 let tableGroup = 'all';
@@ -125,7 +125,9 @@ function normalizeCompetition(value = {}) {
     competition.live = {
       ...competition.live,
       startScore: Number(competition.live.startScore) || matchStartScore(liveMatch, competition.settings),
-      legsToWin: Number(competition.live.legsToWin) || matchLegsToWin(liveMatch, competition.settings)
+      legsToWin: Number(competition.live.legsToWin) || matchLegsToWin(liveMatch, competition.settings),
+      pendingDarts: Array.isArray(competition.live.pendingDarts) ? competition.live.pendingDarts : [],
+      pendingMultiplier: ['S','D','T'].includes(competition.live.pendingMultiplier) ? competition.live.pendingMultiplier : 'S'
     };
   }
   return competition;
@@ -725,6 +727,11 @@ function renderScorer() {
   const statsA = livePlayerStats(live.playerA);
   const statsB = livePlayerStats(live.playerB);
   const visits = live.visits.slice().reverse();
+  const evaluation = evaluatePendingVisit(live);
+  const pending = live.pendingDarts || [];
+  const locked = evaluation.bust || evaluation.checkout || pending.length >= 3;
+  const canSubmit = evaluation.bust || evaluation.checkout || pending.length === 3;
+  const submitLabel = evaluation.checkout ? 'Zatwierdź checkout' : (evaluation.bust ? 'Zatwierdź BUST' : 'Zatwierdź wizytę');
   return `
     ${pageHeader('Licznik X01', `${esc(playerName(live.playerA))} vs ${esc(playerName(live.playerB))}`, `${live.startScore || matchStartScore(match)} · pierwszy do ${live.legsToWin || matchLegsToWin(match)} wygranych legów · ${match.bracketRound ? knockoutStageLabel(match.stageKey) : (match.group ? `Grupa ${match.group}` : 'mecz ligowy')}`, `<button class="btn ghost" data-route="matches">Zapisz i wyjdź</button>`)}
     <div class="scorer">
@@ -733,20 +740,48 @@ function renderScorer() {
         <div class="versus"><div><div class="leg-label">Legi</div><div class="legs-big">${live.legs[live.playerA]} : ${live.legs[live.playerB]}</div><div class="muted">Leg ${live.legNumber}</div></div></div>
         ${scorePlayer(live.playerB, statsB)}
       </div>
+      ${renderCheckoutHint(live, evaluation)}
       <div class="entry-panel">
         <section class="card accent">
           <div class="section-head"><div><h2>Wynik wizyty</h2><div class="muted">Rzuca: <strong class="green">${esc(playerName(live.currentPlayerId))}</strong></div></div><button class="btn small ghost" id="toggleStarter" ${live.visits.some(v=>v.leg===live.legNumber)?'disabled':''}>Zmień rozpoczynającego</button></div>
           <form id="scoreForm">
-            <input id="scoreInput" class="score-input" type="number" inputmode="numeric" min="0" max="180" autocomplete="off" placeholder="0–180" required autofocus>
-            <div class="quick-grid">${[26,41,45,60,81,85,100,121,140,180].map(v=>`<button type="button" class="btn quick-score" data-score="${v}">${v}</button>`).join('')}</div>
-            <div class="checkout-row"><span class="muted">Przy zejściu do zera liczba użytych lotek:</span><select id="checkoutDarts"><option value="1">1 lotka</option><option value="2">2 lotki</option><option value="3" selected>3 lotki</option></select></div>
-            <div class="row-actions" style="margin-top:14px"><button class="btn primary" type="submit">Zatwierdź wynik</button><button class="btn ghost" type="button" id="undoVisit" ${live.undo.length?'':'disabled'}>Cofnij ostatnią wizytę</button></div>
+            <div class="visit-builder">
+              <div class="dart-slots">${[0,1,2].map(index=>{
+                const dart=pending[index];
+                return `<div class="dart-slot ${dart?'filled':''}"><span>Lotka ${index+1}</span><strong>${dart?esc(dart.label):'—'}</strong><small>${dart?`${dart.value} pkt`:'oczekuje'}</small></div>`;
+              }).join('')}</div>
+              <div class="visit-total ${evaluation.bust?'bust':evaluation.checkout?'checkout':''}">
+                <span>${evaluation.bust?'BUST':evaluation.checkout?'CHECKOUT':'Suma wizyty'}</span>
+                <strong>${evaluation.bust?0:evaluation.enteredScore}</strong>
+                <small>${evaluation.bust?`wynik wróci do ${evaluation.remainingBefore}`:`po zatwierdzeniu zostanie ${evaluation.remainingAfter}`}</small>
+              </div>
+            </div>
+
+            <div class="multiplier-picker" aria-label="Wybierz mnożnik">
+              ${[['S','Singiel'],['D','Double'],['T','Triple']].map(([code,label])=>`<button type="button" class="multiplier-btn ${live.pendingMultiplier===code?'active':''}" data-multiplier="${code}" ${locked?'disabled':''}><b>${code}</b><span>${label}</span></button>`).join('')}
+            </div>
+
+            <div class="dart-number-grid" aria-label="Wybierz pole tarczy">
+              ${Array.from({length:20},(_,i)=>i+1).map(value=>`<button type="button" class="dart-number" data-segment="${value}" ${locked?'disabled':''}>${value}</button>`).join('')}
+            </div>
+            <div class="dart-special-grid">
+              <button type="button" class="dart-special" data-special="S25" ${locked?'disabled':''}><b>25</b><span>Outer Bull</span></button>
+              <button type="button" class="dart-special" data-special="DBULL" ${locked?'disabled':''}><b>50</b><span>Bull</span></button>
+              <button type="button" class="dart-special miss" data-special="MISS" ${locked?'disabled':''}><b>0</b><span>Pudło</span></button>
+            </div>
+
+            <div class="dart-actions">
+              <button class="btn primary" type="submit" ${canSubmit?'':'disabled'}>${submitLabel}</button>
+              <button class="btn ghost" type="button" id="undoDart" ${pending.length?'':'disabled'}>Cofnij lotkę</button>
+              <button class="btn ghost" type="button" id="clearDarts" ${pending.length?'':'disabled'}>Wyczyść wizytę</button>
+              <button class="btn ghost" type="button" id="undoVisit" ${live.undo.length?'':'disabled'}>Cofnij ostatnią wizytę</button>
+            </div>
           </form>
-          <div class="note" style="margin-top:14px">Bust jest rozpoznawany automatycznie, gdy wynik spadnie poniżej 0 albo pozostanie 1 punkt. Zejście dokładnie do 0 jest traktowane jako poprawny checkout.</div>
+          <div class="note" style="margin-top:14px">Wybierz Singiel, Double albo Triple, a następnie numer pola. Bull i pudło mają osobne przyciski. Przy checkout liczba użytych lotek jest liczona automatycznie. Obowiązuje zakończenie na double lub Bull 50.</div>
         </section>
         <section class="card">
           <div class="section-head"><h2>Historia wizyt</h2><span class="badge">${live.visits.length}</span></div>
-          <div class="visit-history">${visits.length ? visits.map(v=>`<div class="visit"><span>${esc(playerName(v.playerId))}${v.checkout?' · checkout':''}${v.bust?' · BUST':''}</span><span class="vscore ${v.bust?'red':''}">${v.bust?'0':v.score}</span><span class="vrem">zostało ${v.remainingAfter}</span></div>`).join('') : empty('Pierwszy rzut','Wpisz sumę punktów z maksymalnie trzech lotek.')}</div>
+          <div class="visit-history">${visits.length ? visits.map(v=>`<div class="visit"><div class="visit-player"><span>${esc(playerName(v.playerId))}${v.checkout?' · checkout':''}${v.bust?' · BUST':''}</span>${visitNotation(v)?`<small>${esc(visitNotation(v))}</small>`:''}</div><span class="vscore ${v.bust?'red':''}">${v.bust?'0':v.score}</span><span class="vrem">zostało ${v.remainingAfter}</span></div>`).join('') : empty('Pierwszy rzut','Wybierz trzy lotki, aby zapisać pierwszą wizytę.')}</div>
         </section>
       </div>
     </div>`;
@@ -754,7 +789,7 @@ function renderScorer() {
 
 function scorePlayer(playerId, stats) {
   const live = state.live;
-  return `<div class="score-player ${live.currentPlayerId===playerId?'active':''}"><div class="score-player-name">${esc(playerName(playerId))}</div><div class="remaining">${live.remaining[playerId]}</div><div class="score-stats"><div><b>${fmt(stats.average)}</b><span>średnia</span></div><div><b>${stats.darts}</b><span>lotki</span></div><div><b>${stats.last || '—'}</b><span>ostatnia</span></div></div></div>`;
+  return `<div class="score-player ${live.currentPlayerId===playerId?'active':''}"><div class="score-player-name">${esc(playerName(playerId))}</div><div class="remaining">${live.remaining[playerId]}</div><div class="score-stats"><div><b>${fmt(stats.average)}</b><span>średnia</span></div><div><b>${stats.darts}</b><span>lotki</span></div><div><b>${stats.last ?? '—'}</b><span>ostatnia</span></div></div></div>`;
 }
 
 function bindCurrentPage() {
@@ -786,7 +821,11 @@ function bindCurrentPage() {
   $$('.reopen-match').forEach(b=>b.addEventListener('click',()=>reopenMatch(b.dataset.id)));
   $$('[data-table-group]').forEach(b=>b.addEventListener('click',()=>{tableGroup=b.dataset.tableGroup;render();}));
   $('#scoreForm')?.addEventListener('submit', submitScore);
-  $$('.quick-score').forEach(b=>b.addEventListener('click',()=>{$('#scoreInput').value=b.dataset.score;$('#scoreInput').focus();}));
+  $$('.multiplier-btn').forEach(b=>b.addEventListener('click',()=>selectDartMultiplier(b.dataset.multiplier)));
+  $$('.dart-number').forEach(b=>b.addEventListener('click',()=>addPendingDart(Number(b.dataset.segment))));
+  $$('.dart-special').forEach(b=>b.addEventListener('click',()=>addSpecialDart(b.dataset.special)));
+  $('#undoDart')?.addEventListener('click', undoPendingDart);
+  $('#clearDarts')?.addEventListener('click', clearPendingDarts);
   $('#undoVisit')?.addEventListener('click', undoVisit);
   $('#toggleStarter')?.addEventListener('click', toggleLegStarter);
   $('#exportData')?.addEventListener('click', exportData);
@@ -1334,7 +1373,8 @@ function createLive(match) {
     initialStarterId:match.playerA,legStarterId:match.playerA,currentPlayerId:match.playerA,
     startScore,legsToWin,
     remaining:{[match.playerA]:startScore,[match.playerB]:startScore},
-    legs:{[match.playerA]:0,[match.playerB]:0},legNumber:1,visits:[],legRecords:[],undo:[],startedAt:new Date().toISOString()
+    legs:{[match.playerA]:0,[match.playerB]:0},legNumber:1,visits:[],legRecords:[],undo:[],
+    pendingDarts:[],pendingMultiplier:'S',startedAt:new Date().toISOString()
   };
 }
 
@@ -1381,25 +1421,236 @@ function snapshotLive() {
   const snap=clone(state.live);delete snap.undo;return snap;
 }
 
+const checkoutSuggestionCache = new Map();
+const preferredFinishes = ['D20','D16','D18','D12','D10','D8','D14','D6','D4','D2','D1','D19','D17','D15','D13','D11','D9','D7','D5','D3','DBULL'];
+const checkoutOverrides = {
+  170:['T20','T20','DBULL'],167:['T20','T19','DBULL'],164:['T20','T18','DBULL'],161:['T20','T17','DBULL'],
+  160:['T20','T20','D20'],157:['T20','T19','D20'],156:['T20','T20','D18'],152:['T20','T20','D16'],
+  148:['T20','T16','D20'],144:['T20','T20','D12'],141:['T20','T19','D12'],140:['T20','T16','D16'],
+  136:['T20','T20','D8'],132:['T20','T16','D12'],128:['T18','T18','D10'],124:['T20','T16','D8'],
+  120:['T20','S20','D20'],116:['T20','S16','D20'],112:['T20','S12','D20'],108:['T20','S8','D20'],
+  104:['T18','S10','D20'],100:['T20','D20'],99:['T19','S10','D16'],98:['T20','D19'],97:['T19','D20'],
+  96:['T20','D18'],95:['T19','D19'],94:['T18','D20'],93:['T19','D18'],92:['T20','D16'],91:['T17','D20'],
+  90:['T18','D18'],89:['T19','D16'],88:['T16','D20'],87:['T17','D18'],86:['T18','D16'],85:['T15','D20'],
+  84:['T16','D18'],83:['T17','D16'],82:['T14','D20'],81:['T19','D12'],80:['T16','D16'],79:['T13','D20'],
+  78:['T14','D18'],77:['T15','D16'],76:['T20','D8'],75:['T13','D18'],74:['T14','D16'],73:['T19','D8'],
+  72:['T16','D12'],71:['T13','D16'],70:['T18','D8'],69:['T19','D6'],68:['T20','D4'],67:['T17','D8'],
+  66:['T10','D18'],65:['T19','D4'],64:['T16','D8'],63:['T13','D12'],62:['T10','D16'],61:['T15','D8'],
+  60:['S20','D20'],59:['S19','D20'],58:['S18','D20'],57:['S17','D20'],56:['S16','D20'],55:['S15','D20'],
+  54:['S14','D20'],53:['S13','D20'],52:['S12','D20'],51:['S11','D20'],50:['DBULL'],49:['S9','D20'],
+  48:['S16','D16'],47:['S15','D16'],46:['S14','D16'],45:['S13','D16'],44:['S12','D16'],43:['S11','D16'],
+  42:['S10','D16'],41:['S9','D16'],40:['D20'],39:['S7','D16'],38:['D19'],37:['S5','D16'],36:['D18'],
+  35:['S3','D16'],34:['D17'],33:['S1','D16'],32:['D16'],31:['S15','D8'],30:['D15'],29:['S13','D8'],
+  28:['D14'],27:['S11','D8'],26:['D13'],25:['S9','D8'],24:['D12'],23:['S7','D8'],22:['D11'],
+  21:['S5','D8'],20:['D10'],19:['S3','D8'],18:['D9'],17:['S1','D8'],16:['D8'],15:['S7','D4'],
+  14:['D7'],13:['S5','D4'],12:['D6'],11:['S3','D4'],10:['D5'],9:['S1','D4'],8:['D4'],
+  7:['S3','D2'],6:['D3'],5:['S1','D2'],4:['D2'],3:['S1','D1'],2:['D1']
+};
+
+function dartFromParts(segment, multiplier='S') {
+  const value = Number(segment);
+  const factor = multiplier==='T'?3:(multiplier==='D'?2:1);
+  return {segment:value,multiplier,label:`${multiplier}${value}`,value:value*factor};
+}
+
+function specialDart(code) {
+  if(code==='S25') return {segment:25,multiplier:'S',label:'S25',value:25};
+  if(code==='DBULL') return {segment:25,multiplier:'D',label:'DBULL',value:50};
+  return {segment:0,multiplier:'M',label:'MISS',value:0};
+}
+
+function isDoubleDart(dart) {
+  return dart?.multiplier==='D';
+}
+
+function evaluatePendingVisit(live=state.live) {
+  const pending = Array.isArray(live?.pendingDarts) ? live.pendingDarts : [];
+  const pid = live?.currentPlayerId;
+  const before = Number(live?.remaining?.[pid] || 0);
+  let remaining = before;
+  let enteredScore = 0;
+  let bust = false;
+  let checkout = false;
+  for(const dart of pending){
+    enteredScore += Number(dart.value || 0);
+    const after = remaining - Number(dart.value || 0);
+    const invalidFinish = after===0 && state.settings.doubleOut !== false && !isDoubleDart(dart);
+    if(after<0 || after===1 || invalidFinish){
+      bust = true;
+      remaining = before;
+      break;
+    }
+    remaining = after;
+    if(after===0){
+      checkout = true;
+      break;
+    }
+  }
+  return {
+    remainingBefore:before,
+    remainingAfter:bust?before:remaining,
+    enteredScore,
+    score:bust?0:enteredScore,
+    bust,
+    checkout,
+    darts:pending.length
+  };
+}
+
+function checkoutCandidateDarts() {
+  const darts=[];
+  for(let value=20;value>=1;value--) darts.push(dartFromParts(value,'T'));
+  for(let value=20;value>=1;value--) darts.push(dartFromParts(value,'S'));
+  for(let value=20;value>=1;value--) darts.push(dartFromParts(value,'D'));
+  darts.push(specialDart('S25'),specialDart('DBULL'));
+  return darts;
+}
+
+function finishingDarts(doubleOut=true) {
+  if(!doubleOut) return checkoutCandidateDarts();
+  return preferredFinishes.map(label=>label==='DBULL'?specialDart('DBULL'):dartFromParts(Number(label.slice(1)),'D'));
+}
+
+function routePenalty(route) {
+  const finish = route.at(-1)?.label || '';
+  let finishRank = preferredFinishes.indexOf(finish);
+  if(finishRank<0) finishRank=50;
+  if(finish==='D1') finishRank=50;
+  if(finish==='D2') finishRank=35;
+  const setupPenalty = route.slice(0,-1).reduce((sum,dart,index)=>{
+    let rank=0;
+    if(dart.multiplier==='T') rank=20-Number(dart.segment);
+    else if(dart.multiplier==='S') rank=24+(20-Number(dart.segment));
+    else if(dart.multiplier==='D') rank=50+(20-Number(dart.segment));
+    else rank=80;
+    return sum + rank*(index+1);
+  },0);
+  return finishRank*10 + setupPenalty*20;
+}
+
+function checkoutSuggestion(score, maxDarts=3, doubleOut=true) {
+  score=Number(score);maxDarts=Math.max(0,Math.min(3,Number(maxDarts)||0));
+  if(score<=0||maxDarts<=0)return null;
+  const key=`${score}|${maxDarts}|${doubleOut?'D':'O'}`;
+  if(checkoutSuggestionCache.has(key)) return checkoutSuggestionCache.get(key);
+  if(doubleOut && checkoutOverrides[score] && checkoutOverrides[score].length<=maxDarts){
+    const result=checkoutOverrides[score].slice();checkoutSuggestionCache.set(key,result);return result;
+  }
+  const setup=checkoutCandidateDarts();
+  const finish=finishingDarts(doubleOut);
+  for(let length=1;length<=maxDarts;length++){
+    const routes=[];
+    if(length===1){
+      finish.forEach(last=>{if(last.value===score)routes.push([last]);});
+    }else if(length===2){
+      for(const first of setup) for(const last of finish) if(first.value+last.value===score)routes.push([first,last]);
+    }else{
+      for(const first of setup) for(const second of setup){
+        const remaining=score-first.value-second.value;
+        if(remaining<=0)continue;
+        for(const last of finish) if(last.value===remaining)routes.push([first,second,last]);
+      }
+    }
+    if(routes.length){
+      routes.sort((a,b)=>routePenalty(a)-routePenalty(b));
+      const result=routes[0].map(d=>d.label);
+      checkoutSuggestionCache.set(key,result);return result;
+    }
+  }
+  checkoutSuggestionCache.set(key,null);return null;
+}
+
+function renderCheckoutHint(live, evaluation) {
+  if(evaluation.bust){
+    return `<div class="checkout-hint bust-hint" aria-live="polite"><span>BUST</span><strong>Wizyta nie zostanie odjęta</strong><small>Po zatwierdzeniu pozostanie ${evaluation.remainingBefore} punktów.</small></div>`;
+  }
+  if(evaluation.checkout){
+    return `<div class="checkout-hint checkout-ready" aria-live="polite"><span>CHECKOUT</span><strong>${(live.pendingDarts||[]).map(d=>esc(d.label)).join(' · ')}</strong><small>Zamknięcie w ${(live.pendingDarts||[]).length} ${lotkaWord((live.pendingDarts||[]).length)}.</small></div>`;
+  }
+  const dartsLeft=3-(live.pendingDarts||[]).length;
+  const suggestion=checkoutSuggestion(evaluation.remainingAfter,dartsLeft,state.settings.doubleOut!==false);
+  if(!suggestion)return '';
+  return `<div class="checkout-hint" aria-live="polite"><span>Podpowiedź checkout</span><strong>${suggestion.map(esc).join(' · ')}</strong><small>${evaluation.remainingAfter} punktów · możliwe w ${suggestion.length} ${lotkaWord(suggestion.length)}.</small></div>`;
+}
+
+function lotkaWord(count) {
+  return count===1?'lotce':'lotkach';
+}
+
+function visitNotation(visit) {
+  if(Array.isArray(visit?.throws)&&visit.throws.length) return visit.throws.map(d=>d.label).join(' · ');
+  return visit?.notation || '';
+}
+
+function selectDartMultiplier(multiplier) {
+  const live=state.live;if(!live||!['S','D','T'].includes(multiplier))return;
+  const evaluation=evaluatePendingVisit(live);
+  if(evaluation.bust||evaluation.checkout||(live.pendingDarts||[]).length>=3)return;
+  live.pendingMultiplier=multiplier;saveState();render();
+}
+
+function addPendingDart(segment) {
+  const live=state.live;if(!live)return;
+  const evaluation=evaluatePendingVisit(live);
+  if(evaluation.bust||evaluation.checkout||(live.pendingDarts||[]).length>=3)return;
+  const value=Number(segment);if(!Number.isInteger(value)||value<1||value>20)return;
+  live.pendingDarts=live.pendingDarts||[];
+  live.pendingDarts.push(dartFromParts(value,live.pendingMultiplier||'S'));
+  saveState();render();
+}
+
+function addSpecialDart(code) {
+  const live=state.live;if(!live)return;
+  const evaluation=evaluatePendingVisit(live);
+  if(evaluation.bust||evaluation.checkout||(live.pendingDarts||[]).length>=3)return;
+  live.pendingDarts=live.pendingDarts||[];
+  live.pendingDarts.push(specialDart(code));
+  saveState();render();
+}
+
+function undoPendingDart() {
+  const live=state.live;if(!live?.pendingDarts?.length)return;
+  live.pendingDarts.pop();saveState();render();
+}
+
+function clearPendingDarts() {
+  const live=state.live;if(!live)return;
+  live.pendingDarts=[];saveState();render();
+}
+
 function submitScore(event) {
   event.preventDefault();
   const live=state.live;if(!live)return;
-  const input=$('#scoreInput');
-  const entered=Number(input.value);
-  if(!Number.isInteger(entered)||entered<0||entered>180)return toast('Wpisz wynik od 0 do 180');
-  const pid=live.currentPlayerId,before=live.remaining[pid],after=before-entered;
-  const bust=entered>before||after<0||after===1;
-  const checkout=!bust&&after===0;
-  if(checkout && live.legs[pid]+1>=Number(live.legsToWin || 2) && !confirm(`Checkout ${before}. Zakończyć mecz zwycięstwem ${playerName(pid)}?`)) return;
+  live.pendingDarts=Array.isArray(live.pendingDarts)?live.pendingDarts:[];
+  if(!live.pendingDarts.length)return toast('Wybierz co najmniej jedną lotkę');
+  const evaluation=evaluatePendingVisit(live);
+  if(!evaluation.bust&&!evaluation.checkout&&live.pendingDarts.length<3)return toast('Dodaj trzecią lotkę albo wybierz Pudło');
+  const pid=live.currentPlayerId;
+  if(evaluation.checkout && live.legs[pid]+1>=Number(live.legsToWin || 2) && !confirm(`Checkout ${evaluation.remainingBefore}. Zakończyć mecz zwycięstwem ${playerName(pid)}?`)) return;
   live.undo.push(snapshotLive());
   if(live.undo.length>50)live.undo.shift();
-  const darts=checkout?Number($('#checkoutDarts').value||3):3;
-  const visit={playerId:pid,score:bust?0:entered,enteredScore:entered,darts,bust,checkout,remainingBefore:before,remainingAfter:bust?before:after,leg:live.legNumber,at:new Date().toISOString()};
+  const throws=clone(live.pendingDarts);
+  const visit={
+    playerId:pid,
+    score:evaluation.score,
+    enteredScore:evaluation.enteredScore,
+    darts:evaluation.darts,
+    bust:evaluation.bust,
+    checkout:evaluation.checkout,
+    remainingBefore:evaluation.remainingBefore,
+    remainingAfter:evaluation.remainingAfter,
+    throws,
+    notation:throws.map(d=>d.label).join(' · '),
+    leg:live.legNumber,
+    at:new Date().toISOString()
+  };
   live.visits.push(visit);
-  if(!bust)live.remaining[pid]=after;
-  if(checkout){
-    const winnerDarts=live.visits.filter(v=>v.leg===live.legNumber&&v.playerId===pid).reduce((s,v)=>s+v.darts,0);
-    live.legRecords.push({leg:live.legNumber,winnerId:pid,darts:winnerDarts,checkout:before});
+  live.pendingDarts=[];
+  live.pendingMultiplier='S';
+  if(!evaluation.bust)live.remaining[pid]=evaluation.remainingAfter;
+  if(evaluation.checkout){
+    const winnerDarts=live.visits.filter(v=>v.leg===live.legNumber&&v.playerId===pid).reduce((sum,v)=>sum+v.darts,0);
+    live.legRecords.push({leg:live.legNumber,winnerId:pid,darts:winnerDarts,checkout:evaluation.remainingBefore});
     live.legs[pid]++;
     if(live.legs[pid]>=Number(live.legsToWin || 2)){
       finalizeLiveMatch(pid);return;
@@ -1414,7 +1665,7 @@ function submitScore(event) {
   }else{
     live.currentPlayerId=pid===live.playerA?live.playerB:live.playerA;
   }
-  saveState();render();setTimeout(()=>$('#scoreInput')?.focus(),0);
+  saveState();render();
 }
 
 function finalizeLiveMatch(winnerId) {
@@ -1548,7 +1799,7 @@ async function installApp() {
 window.addEventListener('beforeinstallprompt',event=>{event.preventDefault();deferredInstallPrompt=event;updateInstallButton();});
 window.addEventListener('appinstalled',()=>{deferredInstallPrompt=null;toast('Aplikacja została zainstalowana');});
 
-if('serviceWorker' in navigator){window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js?v=1.2.0').catch(console.error));}
+if('serviceWorker' in navigator){window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js?v=1.3.0').catch(console.error));}
 
 if (progressCompetition()) saveState();
 render();

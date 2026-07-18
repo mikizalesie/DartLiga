@@ -2,7 +2,7 @@
 
 const LEGACY_STORAGE_KEY = 'dartliga_pwa_state_v1';
 const STORAGE_KEY = 'dartliga_pwa_hub_v2';
-const APP_VERSION = '1.1.1';
+const APP_VERSION = '1.2.0';
 let route = 'home';
 let matchFilter = 'all';
 let tableGroup = 'all';
@@ -29,6 +29,16 @@ function defaultCompetition(overrides = {}) {
       startScore: 501,
       legsToWin: 2,
       groupsCount: 2,
+      qualifiersPerGroup: 2,
+      knockoutLegs: {
+        r128: 3,
+        r64: 3,
+        r32: 3,
+        r16: 3,
+        qf: 4,
+        sf: 5,
+        final: 6
+      },
       pointsWin: 2,
       pointsDraw: 1,
       pointsLoss: 0,
@@ -37,18 +47,40 @@ function defaultCompetition(overrides = {}) {
     players: [],
     matches: [],
     live: null,
+    knockout: {
+      status: 'waiting',
+      qualifiers: [],
+      bracketSize: 0,
+      championId: null,
+      generatedAt: null,
+      completedAt: null
+    },
     startedAt: now,
     completedAt: null,
     createdAt: now,
     updatedAt: now
   };
+  const overrideSettings = overrides.settings || {};
+  const settings = {
+    ...base.settings,
+    ...overrideSettings,
+    knockoutLegs: {
+      ...base.settings.knockoutLegs,
+      ...(overrideSettings.knockoutLegs || {})
+    }
+  };
   return {
     ...base,
     ...overrides,
-    settings: {...base.settings, ...(overrides.settings || {})},
+    settings,
     players: Array.isArray(overrides.players) ? overrides.players : base.players,
     matches: Array.isArray(overrides.matches) ? overrides.matches : base.matches,
-    live: overrides.live || null
+    live: overrides.live || null,
+    knockout: {
+      ...base.knockout,
+      ...(overrides.knockout || {}),
+      qualifiers: Array.isArray(overrides.knockout?.qualifiers) ? overrides.knockout.qualifiers : []
+    }
   };
 }
 
@@ -64,7 +96,7 @@ function defaultHub() {
 }
 
 function normalizeCompetition(value = {}) {
-  return defaultCompetition({
+  const competition = defaultCompetition({
     ...value,
     id: value.id || uid('c'),
     status: value.status || 'active',
@@ -72,9 +104,43 @@ function normalizeCompetition(value = {}) {
     completedAt: value.completedAt || null,
     settings: value.settings || {},
     players: Array.isArray(value.players) ? value.players : [],
-    matches: Array.isArray(value.matches) ? value.matches : [],
-    live: value.live || null
+    matches: [],
+    live: value.live || null,
+    knockout: value.knockout || {}
   });
+  const rawMatches = Array.isArray(value.matches) ? value.matches : [];
+  competition.matches = rawMatches.map(match => normalizeMatch(match, competition.settings));
+  const bracketRounds = [...new Set(competition.matches.filter(match=>match.bracketRound).map(match=>match.bracketRound))];
+  bracketRounds.forEach(round => {
+    const roundMatches = competition.matches.filter(match=>match.bracketRound===round);
+    const stageKey = stageKeyForSize(Math.max(2, roundMatches.length * 2));
+    roundMatches.forEach(match => {
+      const rawMatch = rawMatches.find(item=>item.id===match.id) || {};
+      if (!match.stageKey) match.stageKey = stageKey;
+      if (!Number(rawMatch.legsToWin)) match.legsToWin = knockoutLegsForStage(match.stageKey, competition.settings);
+    });
+  });
+  if (competition.live) {
+    const liveMatch = competition.matches.find(match => match.id === competition.live.matchId);
+    competition.live = {
+      ...competition.live,
+      startScore: Number(competition.live.startScore) || matchStartScore(liveMatch, competition.settings),
+      legsToWin: Number(competition.live.legsToWin) || matchLegsToWin(liveMatch, competition.settings)
+    };
+  }
+  return competition;
+}
+
+function normalizeMatch(match = {}, settings = {}) {
+  const bracket = Boolean(match.bracketRound);
+  const stageKey = match.stageKey || null;
+  return {
+    ...match,
+    phase: match.phase || (bracket ? 'knockout' : (match.group ? 'group' : 'league')),
+    stageKey,
+    startScore: Number(match.startScore) || Number(settings.startScore) || 501,
+    legsToWin: Number(match.legsToWin) || (bracket ? knockoutLegsForStage(stageKey, settings) : Number(settings.legsToWin) || 2)
+  };
 }
 
 function loadHub() {
@@ -144,7 +210,8 @@ function activateCompetition(id, targetRoute = 'dashboard') {
   matchFilter = 'all';
   tableGroup = 'all';
   route = targetRoute;
-  saveHub();
+  progressCompetition();
+  saveState();
   render();
 }
 
@@ -166,7 +233,57 @@ function playerName(id) {
 }
 
 function formatLabel(format) {
-  return ({league:'Liga', groups:'Faza grupowa', knockout:'Turniej pucharowy'})[format] || format;
+  return ({league:'Liga', groups:'Grupy + faza pucharowa', knockout:'Turniej pucharowy'})[format] || format;
+}
+
+const KNOCKOUT_STAGE_LABELS = {
+  r128: '1/64 finału',
+  r64: '1/32 finału',
+  r32: '1/16 finału',
+  r16: '1/8 finału',
+  qf: 'Ćwierćfinał',
+  sf: 'Półfinał',
+  final: 'Finał'
+};
+
+function stageKeyForSize(size) {
+  const value = Number(size) || 0;
+  if (value <= 2) return 'final';
+  if (value <= 4) return 'sf';
+  if (value <= 8) return 'qf';
+  if (value <= 16) return 'r16';
+  if (value <= 32) return 'r32';
+  if (value <= 64) return 'r64';
+  return 'r128';
+}
+
+function knockoutStageLabel(stageKey) {
+  return KNOCKOUT_STAGE_LABELS[stageKey] || 'Faza pucharowa';
+}
+
+function knockoutLegsForStage(stageKey, settings = state?.settings || {}) {
+  const configured = Number(settings.knockoutLegs?.[stageKey]);
+  return Math.max(1, configured || Number(settings.legsToWin) || 2);
+}
+
+function matchLegsToWin(match, settings = state?.settings || {}) {
+  if (!match) return Math.max(1, Number(settings.legsToWin) || 2);
+  return Math.max(1, Number(match.legsToWin) || (match.bracketRound ? knockoutLegsForStage(match.stageKey, settings) : Number(settings.legsToWin) || 2));
+}
+
+function matchStartScore(match, settings = state?.settings || {}) {
+  return Number(match?.startScore) || Number(settings.startScore) || 501;
+}
+
+function competitionFormatSummary(competition = state) {
+  const settings = competition.settings;
+  if (settings.format === 'groups') {
+    return `${settings.startScore} · grupy do ${settings.legsToWin} legów · awans ${settings.qualifiersPerGroup} z grupy · puchar z różnymi limitami legów`;
+  }
+  if (settings.format === 'knockout') {
+    return `${settings.startScore} · liczba legów zależna od etapu`; 
+  }
+  return `${settings.startScore} · do ${settings.legsToWin} wygranych legów`;
 }
 
 function statusBadge(status) {
@@ -293,24 +410,46 @@ function pageHeader(eyebrow, title, subtitle, actions = '') {
   return `<div class="topbar"><div><div class="eyebrow">${eyebrow}</div><h1>${title}</h1><p class="subtitle">${subtitle}</p></div><div class="top-actions">${actions}</div></div>`;
 }
 
+function knockoutLegFields(values = {}, disabled = false) {
+  const stages = [
+    ['r128','1/64 finału'],
+    ['r64','1/32 finału'],
+    ['r32','1/16 finału'],
+    ['r16','1/8 finału'],
+    ['qf','Ćwierćfinał'],
+    ['sf','Półfinał'],
+    ['final','Finał']
+  ];
+  return `<div class="knockout-leg-grid">${stages.map(([key,label]) => `<div class="field"><label>${label}</label><input type="number" name="ko_${key}" min="1" max="25" value="${Math.max(1, Number(values[key]) || knockoutLegsForStage(key))}" ${disabled?'disabled':''}></div>`).join('')}</div>`;
+}
+
 function renderHome() {
   const filters = [
     ['all','Wszystkie'],
     ['active','W trakcie'],
     ['completed','Zakończone']
   ];
+  const defaults = defaultCompetition().settings;
   let competitions = hub.competitions.slice().sort((a,b) => String(b.startedAt || b.createdAt).localeCompare(String(a.startedAt || a.createdAt)));
   if (competitionFilter === 'active') competitions = competitions.filter(c => competitionState(c) !== 'completed');
   if (competitionFilter === 'completed') competitions = competitions.filter(c => competitionState(c) === 'completed');
   return `
-    ${pageHeader('Archiwum i aktywne sezony', 'Moje rozgrywki', 'Możesz równolegle prowadzić kilka lig, grup i turniejów. Każda rozgrywka zachowuje własnych zawodników, mecze, wyniki i statystyki.', `<button class="btn primary" id="showNewCompetition">+ Nowa rozgrywka</button>`)}
+    ${pageHeader('Archiwum i aktywne sezony', 'Moje rozgrywki', 'Możesz równolegle prowadzić kilka lig, rozgrywek grupowych i turniejów. Każda rozgrywka zachowuje własnych zawodników, mecze, wyniki i statystyki.', `<button class="btn primary" id="showNewCompetition">+ Nowa rozgrywka</button>`)}
     <section class="card new-competition-panel" id="newCompetitionPanel" ${newCompetitionPanelOpen ? '' : 'hidden'}>
-      <div class="section-head"><div><h2>Utwórz nową rozgrywkę</h2><p class="muted">Obecne i zakończone rozgrywki pozostaną zapisane.</p></div><button class="btn small ghost" id="hideNewCompetition">Zamknij</button></div>
+      <div class="section-head"><div><h2>Utwórz nową rozgrywkę</h2><p class="muted">Ustal format i zasady przed dodaniem zawodników. Obecne rozgrywki pozostaną zapisane.</p></div><button class="btn small ghost" id="hideNewCompetition">Zamknij</button></div>
       <form id="newCompetitionForm" class="form-grid cols-3">
         <div class="field"><label>Nazwa</label><input name="competitionName" maxlength="80" placeholder="np. Liga Jesienna 2027" required></div>
-        <div class="field"><label>Format</label><select name="format"><option value="league">Liga – każdy z każdym</option><option value="groups">Faza grupowa</option><option value="knockout">Turniej pucharowy</option></select></div>
+        <div class="field"><label>Format</label><select name="format" id="newCompetitionFormat"><option value="league">Liga – każdy z każdym</option><option value="groups">Grupy + faza pucharowa</option><option value="knockout">Turniej pucharowy</option></select></div>
         <div class="field"><label>Data rozpoczęcia</label><input type="datetime-local" name="startedAt" value="${localDateTimeValue()}"></div>
-        <div class="wide"><button class="btn primary" type="submit">Utwórz i przejdź do konfiguracji</button></div>
+        <div class="field"><label>Punkty startowe</label><select name="startScore">${[301,501,701,1001].map(v=>`<option ${v===501?'selected':''}>${v}</option>`).join('')}</select></div>
+        <div class="field" data-league-groups-field><label>Wygrane legi w lidze / grupach</label><input type="number" name="legsToWin" min="1" max="15" value="${defaults.legsToWin}"></div>
+        <div class="field" data-groups-field hidden><label>Liczba grup</label><input type="number" name="groupsCount" min="2" max="12" value="${defaults.groupsCount}"></div>
+        <div class="field" data-groups-field hidden><label>Awans z każdej grupy</label><input type="number" name="qualifiersPerGroup" min="1" max="16" value="${defaults.qualifiersPerGroup}"><small class="field-help">Tylu najlepszych zawodników z każdej grupy przejdzie automatycznie do drabinki.</small></div>
+        <div class="wide knockout-settings-panel" data-knockout-fields hidden>
+          <div class="section-head"><div><h3>Wygrane legi w fazie pucharowej</h3><p class="muted">Każdy etap może mieć inną długość meczu.</p></div></div>
+          ${knockoutLegFields(defaults.knockoutLegs)}
+        </div>
+        <div class="wide"><button class="btn primary" type="submit">Utwórz i przejdź do zawodników</button></div>
       </form>
     </section>
     <div class="tabs competition-tabs">${filters.map(([id,label])=>`<button class="tab ${competitionFilter===id?'active':''}" data-competition-filter="${id}">${label} <span class="muted">${id==='all'?hub.competitions.length:hub.competitions.filter(c=>id==='completed'?competitionState(c)==='completed':competitionState(c)!=='completed').length}</span></button>`).join('')}</div>
@@ -345,9 +484,15 @@ function renderDashboard() {
   const standings = computeStandings('all');
   const leader = standings[0];
   const recent = completed.slice().sort((a,b) => (b.completedAt || '').localeCompare(a.completedAt || '')).slice(0, 5);
-  const next = planned.slice(0, 5);
+  const next = planned.slice().sort(matchSort).slice(0, 5);
+  const knockoutInfo = state.settings.format === 'groups'
+    ? (state.matches.some(m=>m.bracketRound)
+      ? `Faza pucharowa: ${state.knockout?.status === 'completed' ? 'zakończona' : 'w trakcie'}`
+      : 'Faza pucharowa zostanie utworzona po zakończeniu grup')
+    : '';
   return `
-    ${pageHeader('Centrum rozgrywek', esc(state.settings.competitionName), `${formatLabel(state.settings.format)} · ${state.settings.startScore} · do ${state.settings.legsToWin} wygranych legów · start ${formatDateTime(state.startedAt)}`, `<button class="btn ghost" data-route="home">Wszystkie rozgrywki</button><button class="btn info" data-new-competition>+ Nowa rozgrywka</button><button class="btn primary" data-route="matches">Rozpocznij mecz</button>`)}
+    ${pageHeader('Centrum rozgrywek', esc(state.settings.competitionName), `${formatLabel(state.settings.format)} · ${competitionFormatSummary(state)} · start ${formatDateTime(state.startedAt)}`, `<button class="btn ghost" data-route="home">Wszystkie rozgrywki</button><button class="btn info" data-new-competition>+ Nowa rozgrywka</button><button class="btn primary" data-route="matches">Rozpocznij mecz</button>`)}
+    ${knockoutInfo ? `<div class="note safe-note" style="margin-bottom:16px"><strong>${knockoutInfo}</strong>${state.settings.format==='groups' ? ` · awansuje ${state.settings.qualifiersPerGroup} zawodników z każdej grupy.` : ''}</div>` : ''}
     <div class="grid stats">
       ${statCard('Zawodnicy', state.players.length, 'aktywnych w rozgrywkach')}
       ${statCard('Mecze zakończone', completed.length, `z ${state.matches.filter(m=>!m.bye).length} zaplanowanych`)}
@@ -382,24 +527,31 @@ function renderCompetition() {
   const completedMatches = state.matches.filter(m => m.status === 'completed' && !m.bye).length;
   const liveMatches = state.matches.filter(m => m.status === 'live' && !m.bye).length + (state.live ? 1 : 0);
   const canRegenerate = hasSchedule && completedMatches === 0 && liveMatches === 0;
+  const format = state.settings.format;
+  const structureLocked = hasSchedule;
   return `
-    ${pageHeader('Konfiguracja', 'Rozgrywki i zawodnicy', 'Każda liga, faza grupowa i turniej jest zapisywana jako osobna rozgrywka.', `<button class="btn ghost" data-route="home">Moje rozgrywki</button><button class="btn primary" data-new-competition>+ Nowa rozgrywka</button><button class="btn info" id="loadDemo">Wczytaj dane demo</button>`)}
-    ${hasSchedule ? `<div class="note safe-note"><strong>Ta rozgrywka ma już własny terminarz.</strong> Format został zablokowany, aby przypadkowo nie usunąć meczów i wyników. Nową ligę lub turniej utwórz przyciskiem „+ Nowa rozgrywka”.</div>` : ''}
+    ${pageHeader('Konfiguracja', 'Rozgrywki i zawodnicy', 'Dla formatu grupowego aplikacja automatycznie utworzy fazę pucharową po zakończeniu wszystkich meczów grupowych.', `<button class="btn ghost" data-route="home">Moje rozgrywki</button><button class="btn primary" data-new-competition>+ Nowa rozgrywka</button><button class="btn info" id="loadDemo">Wczytaj dane demo</button>`)}
+    ${hasSchedule ? `<div class="note safe-note"><strong>Zasady tej rozgrywki są zablokowane po wygenerowaniu terminarza.</strong> Dzięki temu liczba grup, awansów i limit legów w poszczególnych etapach nie zmieni się w trakcie zawodów.</div>` : ''}
     <div class="grid two" style="margin-top:${hasSchedule ? '16px' : '0'}">
       <section class="card">
-        <div class="section-head"><h2>Ustawienia rozgrywki</h2><span class="badge">${formatLabel(state.settings.format)}</span></div>
+        <div class="section-head"><h2>Ustawienia rozgrywki</h2><span class="badge">${formatLabel(format)}</span></div>
         <form id="competitionForm" class="form-grid">
           <div class="field wide"><label>Nazwa ligi lub turnieju</label><input name="competitionName" maxlength="80" value="${esc(state.settings.competitionName)}" required></div>
-          <div class="field"><label>Format</label><select name="format" ${hasSchedule ? 'disabled' : ''}>
-            <option value="league" ${state.settings.format==='league'?'selected':''}>Liga – każdy z każdym</option>
-            <option value="groups" ${state.settings.format==='groups'?'selected':''}>Faza grupowa</option>
-            <option value="knockout" ${state.settings.format==='knockout'?'selected':''}>Turniej pucharowy</option>
-          </select>${hasSchedule ? `<input type="hidden" name="format" value="${esc(state.settings.format)}"><small class="field-help">Format można zmieniać tylko przed wygenerowaniem terminarza.</small>` : ''}</div>
-          <div class="field"><label>Punkty startowe</label><select name="startScore">${[301,501,701,1001].map(v=>`<option ${Number(state.settings.startScore)===v?'selected':''}>${v}</option>`).join('')}</select></div>
-          <div class="field"><label>Wygrane legi do zwycięstwa</label><input type="number" name="legsToWin" min="1" max="15" value="${state.settings.legsToWin}"></div>
-          <div class="field"><label>Liczba grup</label><input type="number" name="groupsCount" min="2" max="12" value="${state.settings.groupsCount}" ${state.settings.format==='groups'&&!hasSchedule?'':'disabled'}>${state.settings.format==='groups'&&hasSchedule?`<input type="hidden" name="groupsCount" value="${state.settings.groupsCount}">`:''}</div>
-          <div class="field"><label>Punkty za zwycięstwo</label><input type="number" name="pointsWin" min="0" max="10" value="${state.settings.pointsWin}"></div>
-          <div class="field"><label>Punkty za remis</label><input type="number" name="pointsDraw" min="0" max="10" value="${state.settings.pointsDraw}"></div>
+          <div class="field"><label>Format</label><select name="format" ${structureLocked ? 'disabled' : ''} id="competitionFormat">
+            <option value="league" ${format==='league'?'selected':''}>Liga – każdy z każdym</option>
+            <option value="groups" ${format==='groups'?'selected':''}>Grupy + faza pucharowa</option>
+            <option value="knockout" ${format==='knockout'?'selected':''}>Turniej pucharowy</option>
+          </select></div>
+          <div class="field"><label>Punkty startowe</label><select name="startScore" ${structureLocked?'disabled':''}>${[301,501,701,1001].map(v=>`<option ${Number(state.settings.startScore)===v?'selected':''}>${v}</option>`).join('')}</select></div>
+          <div class="field" data-current-league-groups ${format==='knockout'?'hidden':''}><label>Wygrane legi w lidze / grupach</label><input type="number" name="legsToWin" min="1" max="15" value="${state.settings.legsToWin}" ${structureLocked?'disabled':''}></div>
+          <div class="field" data-current-groups ${format==='groups'?'':'hidden'}><label>Liczba grup</label><input type="number" name="groupsCount" min="2" max="12" value="${state.settings.groupsCount}" ${structureLocked?'disabled':''}></div>
+          <div class="field" data-current-groups ${format==='groups'?'':'hidden'}><label>Awans z każdej grupy</label><input type="number" name="qualifiersPerGroup" min="1" max="16" value="${state.settings.qualifiersPerGroup}" ${structureLocked?'disabled':''}><small class="field-help">Po zakończeniu grup aplikacja wybierze tyle najwyżej sklasyfikowanych osób z każdej grupy.</small></div>
+          <div class="field" data-current-points ${format==='knockout'?'hidden':''}><label>Punkty za zwycięstwo</label><input type="number" name="pointsWin" min="0" max="10" value="${state.settings.pointsWin}"></div>
+          <div class="field" data-current-points ${format==='knockout'?'hidden':''}><label>Punkty za remis</label><input type="number" name="pointsDraw" min="0" max="10" value="${state.settings.pointsDraw}"></div>
+          <div class="wide knockout-settings-panel" data-current-knockout ${format==='league'?'hidden':''}>
+            <div class="section-head"><div><h3>Wygrane legi w fazie pucharowej</h3><p class="muted">Ustaw osobno każdy możliwy etap. Aplikacja wykorzysta tylko etapy potrzebne dla liczby zakwalifikowanych zawodników.</p></div></div>
+            ${knockoutLegFields(state.settings.knockoutLegs, structureLocked)}
+          </div>
           <div class="wide row-actions"><button class="btn primary" type="submit">Zapisz ustawienia</button><button class="btn ghost" type="button" id="duplicateCurrentCompetition">Utwórz nową na podstawie tej</button></div>
         </form>
       </section>
@@ -407,31 +559,33 @@ function renderCompetition() {
         <div class="section-head"><h2>Zawodnicy</h2><span class="badge green">${state.players.length}</span></div>
         <form id="playerForm" class="inline-form">
           <div class="field"><label>Imię i nazwisko / pseudonim</label><input name="playerName" maxlength="50" placeholder="np. Michał M." required></div>
-          ${state.settings.format === 'groups' ? `<div class="field"><label>Grupa</label><select name="playerGroup"><option value="">Automatycznie</option>${groups.map(g=>`<option>${g}</option>`).join('')}</select></div>` : ''}
+          ${format === 'groups' ? `<div class="field"><label>Grupa</label><select name="playerGroup"><option value="">Automatycznie</option>${groups.map(g=>`<option>${g}</option>`).join('')}</select></div>` : ''}
           <button class="btn primary" type="submit">Dodaj</button>
         </form>
         <hr>
         ${state.players.length ? `<div class="player-list">${state.players.map((p,i)=>playerRow(p,i,groups)).join('')}</div>` : empty('Brak zawodników','Dodaj co najmniej dwóch zawodników.')}
       </section>
     </div>
+    ${format === 'groups' ? `<section class="card compact group-flow-card" style="margin-top:16px"><div class="flow-steps"><div><span>1</span><strong>${state.settings.groupsCount} grup</strong><small>mecze każdy z każdym</small></div><div class="flow-arrow">→</div><div><span>2</span><strong>${state.settings.qualifiersPerGroup} z każdej grupy</strong><small>awans według tabeli</small></div><div class="flow-arrow">→</div><div><span>3</span><strong>Faza pucharowa</strong><small>tworzona automatycznie</small></div></div></section>` : ''}
     <section class="card accent" style="margin-top:16px">
       <div class="section-head"><div><h2>Terminarz tej rozgrywki</h2><p class="muted">Obecnie: ${state.matches.filter(m=>!m.bye).length} meczów, ${completedMatches} zakończonych.</p></div><div class="row-actions">
-        ${state.settings.format==='groups' && !hasSchedule ? '<button class="btn info" id="autoGroups">Rozdziel grupy</button>' : ''}
+        ${format==='groups' && !hasSchedule ? '<button class="btn info" id="autoGroups">Rozdziel grupy</button>' : ''}
         ${!hasSchedule
           ? `<button class="btn primary" id="generateSchedule" ${state.players.length<2?'disabled':''}>Generuj terminarz</button>`
           : `<button class="btn" disabled>Terminarz zapisany</button>${canRegenerate ? '<button class="btn danger" id="regenerateSchedule">Przebuduj zaplanowany terminarz</button>' : ''}<button class="btn info" data-new-competition>+ Nowa rozgrywka</button>`}
       </div></div>
       ${!hasSchedule
-        ? '<div class="note">Wygenerowany terminarz zostanie zapisany tylko w tej rozgrywce. Inne ligi i turnieje nie zostaną zmienione.</div>'
+        ? `<div class="note">${format==='groups' ? 'Najpierw zostanie wygenerowana faza grupowa. Po wpisaniu ostatniego wyniku grupowego drabinka pucharowa powstanie automatycznie.' : 'Wygenerowany terminarz zostanie zapisany tylko w tej rozgrywce.'}</div>`
         : canRegenerate
-          ? '<div class="note">Możesz przebudować terminarz, ponieważ żaden mecz nie został jeszcze rozegrany. Wyniki innych rozgrywek pozostają bez zmian.</div>'
-          : '<div class="note safe-note">Terminarz zawiera rozpoczęte lub zakończone mecze, dlatego nie można go nadpisać. Utwórz nową rozgrywkę, aby zachować pełną historię.</div>'}
+          ? '<div class="note">Możesz przebudować terminarz, ponieważ żaden mecz nie został jeszcze rozegrany.</div>'
+          : '<div class="note safe-note">Terminarz zawiera rozpoczęte lub zakończone mecze, dlatego nie można go nadpisać.</div>'}
     </section>`;
 }
 
 function playerRow(p, index, groups) {
+  const scheduleLocked = state.matches.length > 0;
   return `<div class="player-row"><div><div class="player-name"><span class="muted">${index+1}.</span> ${esc(p.name)}</div>${state.settings.format==='groups'?`<div class="match-meta">Grupa: ${esc(p.group || 'nieprzypisana')}</div>`:''}</div><div class="row-actions">
-    ${state.settings.format==='groups'?`<select class="player-group-select" data-player-id="${p.id}"><option value="">—</option>${groups.map(g=>`<option ${p.group===g?'selected':''}>${g}</option>`).join('')}</select>`:''}
+    ${state.settings.format==='groups'?`<select class="player-group-select" data-player-id="${p.id}" ${scheduleLocked?'disabled title="Grupy są zablokowane po wygenerowaniu terminarza"':''}><option value="">—</option>${groups.map(g=>`<option ${p.group===g?'selected':''}>${g}</option>`).join('')}</select>`:''}
     <button class="btn small ghost edit-player" data-id="${p.id}">Zmień</button><button class="btn small danger delete-player" data-id="${p.id}">Usuń</button>
   </div></div>`;
 }
@@ -449,10 +603,18 @@ function renderMatches() {
     </section>`;
 }
 
+function matchSort(a, b) {
+  const phaseA = a.bracketRound ? 1 : 0;
+  const phaseB = b.bracketRound ? 1 : 0;
+  return phaseA - phaseB
+    || (a.bracketRound || a.round || 0) - (b.bracketRound || b.round || 0)
+    || String(a.group || '').localeCompare(String(b.group || ''), 'pl');
+}
+
 function filteredMatches() {
   let list = state.matches.filter(m => !m.bye);
   if (matchFilter !== 'all') list = list.filter(m => m.status === matchFilter);
-  return list.slice().sort((a,b) => (a.round||0)-(b.round||0) || String(a.group||'').localeCompare(String(b.group||'')));
+  return list.slice().sort(matchSort);
 }
 
 function countFilter(filter) {
@@ -462,46 +624,75 @@ function countFilter(filter) {
 
 function matchRow(m) {
   const a = playerName(m.playerA), b = playerName(m.playerB);
-  const roundLabel = state.settings.format === 'knockout' ? knockoutRoundLabel(m.bracketRound) : `Kolejka ${m.round || 1}`;
+  const roundLabel = m.bracketRound ? knockoutStageLabel(m.stageKey) : `Kolejka ${m.round || 1}`;
   const group = m.group ? ` · Grupa ${esc(m.group)}` : '';
+  const target = ` · do ${matchLegsToWin(m)} legów`;
   const result = m.status === 'completed' ? `<span class="score-pill">${m.legsA}:${m.legsB}</span>` : '<span class="muted">vs</span>';
   const startLabel = m.status === 'live' ? 'Wznów' : 'Licz punkty';
-  return `<div class="match-row"><div><div class="match-meta">${roundLabel}${group}</div>${statusBadge(m.status)}</div><div class="match-pair"><span class="${m.winnerId===m.playerA?'winner':''}">${esc(a)}</span>${result}<span class="${m.winnerId===m.playerB?'winner':''}">${esc(b)}</span></div><div class="row-actions">
+  return `<div class="match-row"><div><div class="match-meta">${roundLabel}${group}${target}</div>${statusBadge(m.status)}</div><div class="match-pair"><span class="${m.winnerId===m.playerA?'winner':''}">${esc(a)}</span>${result}<span class="${m.winnerId===m.playerB?'winner':''}">${esc(b)}</span></div><div class="row-actions">
     ${m.status !== 'completed' ? `<button class="btn small primary start-match" data-id="${m.id}">${startLabel}</button><button class="btn small ghost manual-result" data-id="${m.id}">Wpisz wynik</button>` : `<button class="btn small ghost reopen-match" data-id="${m.id}">Popraw</button>`}
   </div></div>`;
 }
 
 function renderTables() {
   if (state.settings.format === 'knockout') return renderBracketPage();
-  const groups = state.settings.format === 'groups' ? groupNamesFromPlayers() : ['all'];
+  const groups = state.settings.format === 'groups' ? groupNames() : ['all'];
   const selected = state.settings.format === 'groups' ? (groups.includes(tableGroup) ? tableGroup : groups[0] || 'all') : 'all';
   tableGroup = selected;
   const standings = computeStandings(selected);
+  const qualifiers = state.settings.format === 'groups' ? Math.max(1, Number(state.settings.qualifiersPerGroup) || 1) : 0;
+  const generatedQualifierIds = new Set((state.knockout?.qualifiers || []).filter(q=>q.group===selected).map(q=>q.playerId));
   return `
-    ${pageHeader('Klasyfikacja', state.settings.format==='groups'?'Tabele grupowe':'Tabela ligi', 'Tabela aktualizuje się automatycznie po zakończeniu każdego meczu.')}
+    ${pageHeader('Klasyfikacja', state.settings.format==='groups'?'Tabele grupowe i drabinka':'Tabela ligi', state.settings.format==='groups' ? 'Najlepsi zawodnicy z każdej grupy zostaną automatycznie przeniesieni do fazy pucharowej.' : 'Tabela aktualizuje się automatycznie po zakończeniu każdego meczu.')}
     ${state.settings.format==='groups' ? `<div class="tabs">${groups.map(g=>`<button class="tab ${selected===g?'active':''}" data-table-group="${esc(g)}">Grupa ${esc(g)}</button>`).join('')}</div>` : ''}
     <section class="card">
-      ${standings.length ? standingsTable(standings) : empty('Tabela jest pusta','Dodaj zawodników i rozegraj pierwsze mecze.')}
+      ${standings.length ? standingsTable(standings, {qualifiers, generatedQualifierIds}) : empty('Tabela jest pusta','Dodaj zawodników i rozegraj pierwsze mecze.')}
+      ${state.settings.format==='groups' ? `<div class="note qualification-note" style="margin-top:14px"><strong>Awans: ${qualifiers} ${qualifiers===1?'zawodnik':'zawodników'} z grupy ${esc(selected)}.</strong> ${groupStageComplete() ? 'Klasyfikacja grupowa została zamknięta.' : 'Zaznaczone miejsca są na razie miejscami awansowymi; ostateczny skład drabinki powstanie po wszystkich meczach grupowych.'} Przy równej liczbie punktów decydują kolejno: bilans legów, liczba wygranych legów i średnia 3-dart.</div>` : ''}
     </section>
-    <section class="card compact" style="margin-top:16px"><div class="kpi-mini"><span class="badge">M = mecze</span><span class="badge">W = wygrane</span><span class="badge">R = remisy</span><span class="badge">P = porażki</span><span class="badge">+/- = bilans legów</span><span class="badge">Śr. = średnia 3-dart</span></div></section>`;
+    <section class="card compact" style="margin-top:16px"><div class="kpi-mini"><span class="badge">M = mecze</span><span class="badge">W = wygrane</span><span class="badge">R = remisy</span><span class="badge">P = porażki</span><span class="badge">+/- = bilans legów</span><span class="badge">Śr. = średnia 3-dart</span></div></section>
+    ${state.settings.format==='groups' ? renderKnockoutSection(false) : ''}`;
 }
 
-function standingsTable(rows) {
-  return `<div class="table-wrap"><table><thead><tr><th>#</th><th>Zawodnik</th><th>M</th><th>W</th><th>R</th><th>P</th><th>Legi</th><th>+/-</th><th>Punkty</th><th>Śr.</th></tr></thead><tbody>${rows.map((r,i)=>`<tr><td class="pos">${i+1}</td><td><strong>${esc(playerName(r.playerId))}</strong></td><td>${r.played}</td><td class="green">${r.wins}</td><td>${r.draws}</td><td class="red">${r.losses}</td><td>${r.legsFor}:${r.legsAgainst}</td><td class="${r.diff>0?'green':r.diff<0?'red':''}">${signed(r.diff)}</td><td><strong>${r.points}</strong></td><td>${fmt(r.average)}</td></tr>`).join('')}</tbody></table></div>`;
+function standingsTable(rows, options = {}) {
+  const qualifiers = Math.max(0, Number(options.qualifiers) || 0);
+  const generatedQualifierIds = options.generatedQualifierIds || new Set();
+  return `<div class="table-wrap"><table><thead><tr><th>#</th><th>Zawodnik</th><th>M</th><th>W</th><th>R</th><th>P</th><th>Legi</th><th>+/-</th><th>Punkty</th><th>Śr.</th></tr></thead><tbody>${rows.map((r,i)=>{
+    const qualified = generatedQualifierIds.size ? generatedQualifierIds.has(r.playerId) : i < qualifiers;
+    return `<tr class="${qualified?'qualified-row':''}"><td class="pos">${i+1}</td><td><strong>${esc(playerName(r.playerId))}</strong>${qualified?'<span class="badge green qualification-badge">Awans</span>':''}</td><td>${r.played}</td><td class="green">${r.wins}</td><td>${r.draws}</td><td class="red">${r.losses}</td><td>${r.legsFor}:${r.legsAgainst}</td><td class="${r.diff>0?'green':r.diff<0?'red':''}">${signed(r.diff)}</td><td><strong>${r.points}</strong></td><td>${fmt(r.average)}</td></tr>`;
+  }).join('')}</tbody></table></div>`;
+}
+
+function groupStageComplete() {
+  if (state.settings.format !== 'groups') return false;
+  const groupMatches = state.matches.filter(m=>!m.bracketRound && m.phase==='group');
+  return groupMatches.length > 0 && groupMatches.every(m=>m.status==='completed');
+}
+
+function renderKnockoutSection(standalone = false) {
+  const rounds = [...new Set(state.matches.filter(m=>m.bracketRound).map(m=>m.bracketRound))].sort((a,b)=>a-b);
+  const waiting = state.settings.format === 'groups' && !rounds.length;
+  const heading = standalone ? '' : '<div class="section-head"><div><h2>Faza pucharowa</h2><p class="muted">Zawodnicy są dodawani automatycznie na podstawie tabel grupowych.</p></div></div>';
+  const champion = state.knockout?.championId ? `<div class="champion-card"><span>🏆</span><div><small>Zwycięzca rozgrywek</small><strong>${esc(playerName(state.knockout.championId))}</strong></div></div>` : '';
+  return `<section class="card knockout-section" style="margin-top:${standalone?'0':'16px'}">
+    ${heading}
+    ${champion}
+    ${rounds.length ? `<div class="bracket">${rounds.map(r=>renderBracketRound(r)).join('')}</div>` : waiting
+      ? `<div class="empty"><strong>Drabinka jest dołączona i oczekuje na wyniki grup</strong>Po zakończeniu ostatniego meczu grupowego aplikacja wybierze po ${state.settings.qualifiersPerGroup} zawodników z każdej grupy, rozstawi ich w drabince i utworzy pierwszą rundę.</div>`
+      : empty('Brak drabinki','Dodaj zawodników i wygeneruj turniej pucharowy.')}
+  </section>`;
 }
 
 function renderBracketPage() {
-  const rounds = [...new Set(state.matches.map(m=>m.bracketRound).filter(Boolean))].sort((a,b)=>a-b);
   return `
-    ${pageHeader('Drabinka', 'Turniej pucharowy', 'Zwycięzcy są automatycznie przenoszeni do kolejnej rundy.')}
-    <section class="card">
-      ${rounds.length ? `<div class="bracket">${rounds.map(r=>renderBracketRound(r)).join('')}</div>` : empty('Brak drabinki','Dodaj zawodników i wygeneruj turniej pucharowy.')}
-    </section>`;
+    ${pageHeader('Drabinka', 'Turniej pucharowy', 'Zwycięzcy są automatycznie przenoszeni do kolejnej rundy, a liczba wymaganych legów zależy od etapu.')}
+    ${renderKnockoutSection(true)}`;
 }
 
 function renderBracketRound(round) {
   const matches = state.matches.filter(m=>m.bracketRound===round);
-  return `<div class="bracket-round"><h3>${knockoutRoundLabel(round)}</h3>${matches.map(m=>`<div class="bracket-match"><div class="bracket-line ${m.winnerId===m.playerA?'winner':''}"><span>${esc(playerName(m.playerA))}</span><b>${m.status==='completed'?(m.legsA??''):'–'}</b></div><div class="bracket-line ${m.winnerId===m.playerB?'winner':''}"><span>${esc(playerName(m.playerB))}</span><b>${m.status==='completed'?(m.legsB??''):'–'}</b></div>${m.bye?'<div class="match-meta">Wolny los</div>':''}</div>`).join('')}</div>`;
+  const stage = matches[0]?.stageKey;
+  const target = matches[0] ? matchLegsToWin(matches[0]) : 0;
+  return `<div class="bracket-round"><h3>${knockoutStageLabel(stage)}</h3><div class="bracket-target">do ${target} wygranych legów</div>${matches.map(m=>`<div class="bracket-match"><div class="bracket-line ${m.winnerId===m.playerA?'winner':''}"><span>${esc(playerName(m.playerA))}</span><b>${m.status==='completed'?(m.legsA??''):'–'}</b></div><div class="bracket-line ${m.winnerId===m.playerB?'winner':''}"><span>${esc(playerName(m.playerB))}</span><b>${m.status==='completed'?(m.legsB??''):'–'}</b></div>${m.bye?'<div class="match-meta">Wolny los</div>':''}</div>`).join('')}</div>`;
 }
 
 function renderStats() {
@@ -535,7 +726,7 @@ function renderScorer() {
   const statsB = livePlayerStats(live.playerB);
   const visits = live.visits.slice().reverse();
   return `
-    ${pageHeader('Licznik X01', `${esc(playerName(live.playerA))} vs ${esc(playerName(live.playerB))}`, `${state.settings.startScore} · pierwszy do ${state.settings.legsToWin} wygranych legów`, `<button class="btn ghost" data-route="matches">Zapisz i wyjdź</button>`)}
+    ${pageHeader('Licznik X01', `${esc(playerName(live.playerA))} vs ${esc(playerName(live.playerB))}`, `${live.startScore || matchStartScore(match)} · pierwszy do ${live.legsToWin || matchLegsToWin(match)} wygranych legów · ${match.bracketRound ? knockoutStageLabel(match.stageKey) : (match.group ? `Grupa ${match.group}` : 'mecz ligowy')}`, `<button class="btn ghost" data-route="matches">Zapisz i wyjdź</button>`)}
     <div class="scorer">
       <div class="scoreboard">
         ${scorePlayer(live.playerA, statsA)}
@@ -570,6 +761,9 @@ function bindCurrentPage() {
   $('#showNewCompetition')?.addEventListener('click', openNewCompetitionCreator);
   $('#hideNewCompetition')?.addEventListener('click', () => { newCompetitionPanelOpen=false; render(); });
   $('#newCompetitionForm')?.addEventListener('submit', createCompetition);
+  $('#newCompetitionFormat')?.addEventListener('change', updateNewCompetitionFields);
+  $('#competitionFormat')?.addEventListener('change', updateCurrentCompetitionFields);
+  updateNewCompetitionFields();
   $$('[data-competition-filter]').forEach(b=>b.addEventListener('click',()=>{competitionFilter=b.dataset.competitionFilter;render();}));
   $$('.open-competition').forEach(b=>b.addEventListener('click',()=>activateCompetition(b.dataset.id,'dashboard')));
   $$('.finish-competition').forEach(b=>b.addEventListener('click',()=>finishCompetition(b.dataset.id)));
@@ -600,6 +794,25 @@ function bindCurrentPage() {
   $('#resetAll')?.addEventListener('click', resetAll);
   $('#installBtnPage')?.addEventListener('click', installApp);
   $('#installBtn')?.addEventListener('click', installApp);
+}
+
+function updateNewCompetitionFields() {
+  const form = $('#newCompetitionForm');
+  if (!form) return;
+  const format = form.querySelector('[name="format"]')?.value || 'league';
+  form.querySelectorAll('[data-groups-field]').forEach(el => el.hidden = format !== 'groups');
+  form.querySelectorAll('[data-knockout-fields]').forEach(el => el.hidden = format === 'league');
+  form.querySelectorAll('[data-league-groups-field]').forEach(el => el.hidden = format === 'knockout');
+}
+
+function updateCurrentCompetitionFields() {
+  const form = $('#competitionForm');
+  if (!form) return;
+  const format = form.querySelector('[name="format"]')?.value || state.settings.format;
+  form.querySelectorAll('[data-current-groups]').forEach(el => el.hidden = format !== 'groups');
+  form.querySelectorAll('[data-current-knockout]').forEach(el => el.hidden = format === 'league');
+  form.querySelectorAll('[data-current-league-groups]').forEach(el => el.hidden = format === 'knockout');
+  form.querySelectorAll('[data-current-points]').forEach(el => el.hidden = format === 'knockout');
 }
 
 function openNewCompetitionCreator() {
@@ -650,14 +863,25 @@ function duplicateCompetition(id) {
   toast('Utworzono nową, osobną rozgrywkę. Poprzednie wyniki pozostały zapisane.');
 }
 
+function knockoutLegsFromForm(data, fallback = state.settings.knockoutLegs || {}) {
+  const result = {...fallback};
+  Object.keys(KNOCKOUT_STAGE_LABELS).forEach(key => {
+    const raw = data.get(`ko_${key}`);
+    if (raw !== null && raw !== '') result[key] = Math.max(1, Number(raw) || result[key] || 2);
+  });
+  return result;
+}
+
 function settingsFromForm(data) {
   return {
     ...state.settings,
     competitionName: String(data.get('competitionName') || '').trim() || 'Liga Darta',
     format: String(data.get('format') || state.settings.format || 'league'),
-    startScore: Number(data.get('startScore')) || 501,
-    legsToWin: Math.max(1, Number(data.get('legsToWin')) || 2),
-    groupsCount: Math.max(2, Number(data.get('groupsCount')) || state.settings.groupsCount || 2),
+    startScore: Number(data.get('startScore')) || Number(state.settings.startScore) || 501,
+    legsToWin: Math.max(1, Number(data.get('legsToWin')) || Number(state.settings.legsToWin) || 2),
+    groupsCount: Math.max(2, Number(data.get('groupsCount')) || Number(state.settings.groupsCount) || 2),
+    qualifiersPerGroup: Math.max(1, Number(data.get('qualifiersPerGroup')) || Number(state.settings.qualifiersPerGroup) || 1),
+    knockoutLegs: knockoutLegsFromForm(data, state.settings.knockoutLegs),
     pointsWin: Math.max(0, Number(data.get('pointsWin') ?? state.settings.pointsWin ?? 2)),
     pointsDraw: Math.max(0, Number(data.get('pointsDraw') ?? state.settings.pointsDraw ?? 1))
   };
@@ -673,7 +897,12 @@ function createCompetition(event) {
   const competition = defaultCompetition({
     settings: {
       competitionName: name,
-      format: String(data.get('format') || 'league')
+      format: String(data.get('format') || 'league'),
+      startScore: Number(data.get('startScore')) || 501,
+      legsToWin: Math.max(1, Number(data.get('legsToWin')) || 2),
+      groupsCount: Math.max(2, Number(data.get('groupsCount')) || 2),
+      qualifiersPerGroup: Math.max(1, Number(data.get('qualifiersPerGroup')) || 2),
+      knockoutLegs: knockoutLegsFromForm(data, defaultCompetition().settings.knockoutLegs)
     },
     startedAt: Number.isNaN(startedDate.getTime()) ? new Date().toISOString() : startedDate.toISOString()
   });
@@ -768,8 +997,9 @@ function saveCompetitionSettings(event) {
 }
 
 function addPlayer(event) {
-  if (!ensureCompetitionOpen()) return;
   event.preventDefault();
+  if (!ensureCompetitionOpen()) return;
+  if (state.matches.length) return toast('Nie można dodawać zawodników po wygenerowaniu terminarza');
   const data = new FormData(event.currentTarget);
   const name = String(data.get('playerName')).trim();
   if (!name) return;
@@ -791,6 +1021,7 @@ function editPlayer(id) {
 
 function deletePlayer(id) {
   if (!ensureCompetitionOpen()) return;
+  if (state.matches.length) return toast('Nie można usuwać zawodników po wygenerowaniu terminarza');
   const p = player(id); if (!p) return;
   const related = state.matches.filter(m=>m.playerA===id||m.playerB===id).length;
   if (!confirm(`Usunąć zawodnika „${p.name}”?${related ? ' Powiązane mecze także zostaną usunięte.' : ''}`)) return;
@@ -802,6 +1033,7 @@ function deletePlayer(id) {
 
 function changePlayerGroup(id, group) {
   if (!ensureCompetitionOpen()) return;
+  if (state.matches.length) return toast('Grupy są zablokowane po wygenerowaniu terminarza');
   const p = player(id); if (!p) return;
   p.group = group;
   saveState();
@@ -812,26 +1044,45 @@ function groupNames() {
 }
 
 function groupNamesFromPlayers() {
-  return [...new Set(state.players.map(p=>p.group).filter(Boolean))].sort();
+  const configured = groupNames();
+  return configured.filter(group => state.players.some(player => player.group === group));
 }
 
 function autoAssignGroups() {
   if (!ensureCompetitionOpen()) return;
   if (!state.players.length) return;
+  autoAssignGroupsSilent();
+  saveState(); render(); toast('Zawodnicy zostali równomiernie rozdzieleni do grup');
+}
+
+function validateGroupSetup() {
   const groups = groupNames();
-  const shuffled = shuffle(state.players.slice());
-  shuffled.forEach((p,i)=>p.group=groups[i%groups.length]);
-  saveState(); render(); toast('Zawodnicy rozdzieleni do grup');
+  const qualifiers = Math.max(1, Number(state.settings.qualifiersPerGroup) || 1);
+  if (state.players.length < groups.length * 2) {
+    return `Potrzeba co najmniej ${groups.length * 2} zawodników, aby w każdej z ${groups.length} grup były minimum 2 osoby.`;
+  }
+  for (const group of groups) {
+    const count = state.players.filter(player => player.group === group).length;
+    if (count < 2) return `Grupa ${group} ma tylko ${count} zawodników. Każda grupa musi mieć minimum 2 osoby.`;
+    if (qualifiers > count) return `Z grupy ${group} nie może awansować ${qualifiers} zawodników, ponieważ grupa ma tylko ${count} osób.`;
+  }
+  if (groups.length * qualifiers < 2) return 'Do fazy pucharowej musi awansować co najmniej dwóch zawodników.';
+  return '';
 }
 
 function generateSchedule() {
   if (!ensureCompetitionOpen()) return;
   if (state.players.length < 2) return toast('Dodaj co najmniej dwóch zawodników');
   if (state.matches.length) return toast('Ta rozgrywka ma już terminarz. Utwórz nową rozgrywkę, aby zachować historię.');
+  if (state.settings.format === 'groups') {
+    if (state.players.some(player=>!player.group || !groupNames().includes(player.group))) autoAssignGroupsSilent();
+    const error = validateGroupSetup();
+    if (error) return toast(error);
+  }
   buildSchedule();
   saveState();
   render();
-  toast('Terminarz zapisany w tej rozgrywce');
+  toast(state.settings.format === 'groups' ? 'Faza grupowa zapisana. Drabinka powstanie automatycznie po grupach.' : 'Terminarz zapisany w tej rozgrywce');
 }
 
 function regenerateSchedule() {
@@ -839,6 +1090,11 @@ function regenerateSchedule() {
   const protectedMatches = state.matches.some(m => m.status === 'completed' || m.status === 'live') || Boolean(state.live);
   if (protectedMatches) return toast('Nie można nadpisać terminarza z wynikami. Utwórz nową rozgrywkę.');
   if (!confirm('Przebudować wyłącznie zaplanowany terminarz tej rozgrywki? Żadne inne ligi ani turnieje nie zostaną zmienione.')) return;
+  if (state.settings.format === 'groups') {
+    if (state.players.some(player=>!player.group || !groupNames().includes(player.group))) autoAssignGroupsSilent();
+    const error = validateGroupSetup();
+    if (error) return toast(error);
+  }
   state.matches = [];
   state.live = null;
   buildSchedule();
@@ -850,16 +1106,25 @@ function regenerateSchedule() {
 function buildSchedule() {
   state.matches = [];
   state.live = null;
+  state.knockout = {
+    status: 'waiting',
+    qualifiers: [],
+    bracketSize: 0,
+    championId: null,
+    generatedAt: null,
+    completedAt: null
+  };
   if (state.settings.format === 'league') {
-    state.matches = roundRobin(state.players.map(p=>p.id), null);
+    state.matches = roundRobin(state.players.map(p=>p.id), null, 'league');
   } else if (state.settings.format === 'groups') {
     if (state.players.some(p=>!p.group)) autoAssignGroupsSilent();
-    groupNamesFromPlayers().forEach(group=>{
+    groupNames().forEach(group=>{
       const ids=state.players.filter(p=>p.group===group).map(p=>p.id);
-      state.matches.push(...roundRobin(ids, group));
+      state.matches.push(...roundRobin(ids, group, 'group'));
     });
+    state.knockout.status = 'waiting';
   } else {
-    createKnockoutRound(shuffle(state.players.map(p=>p.id)),1);
+    createInitialKnockout(shuffle(state.players.map(p=>p.id)), []);
   }
 }
 
@@ -868,7 +1133,7 @@ function autoAssignGroupsSilent() {
   shuffle(state.players.slice()).forEach((p,i)=>p.group=groups[i%groups.length]);
 }
 
-function roundRobin(ids, group) {
+function roundRobin(ids, group, phase = group ? 'group' : 'league') {
   const list=ids.slice();
   if (list.length<2) return [];
   if (list.length%2) list.push(null);
@@ -877,46 +1142,174 @@ function roundRobin(ids, group) {
   for(let r=0;r<n-1;r++){
     for(let i=0;i<n/2;i++){
       const a=rotation[i], b=rotation[n-1-i];
-      if(a&&b) rounds.push(newMatch(r%2===0?a:b,r%2===0?b:a,r+1,group));
+      if(a&&b) rounds.push(newMatch(r%2===0?a:b,r%2===0?b:a,r+1,group,null,{phase}));
     }
     rotation=[rotation[0],rotation[n-1],...rotation.slice(1,n-1)];
   }
   return rounds;
 }
 
-function newMatch(a,b,round=1,group=null,bracketRound=null) {
-  return {id:uid('m'),playerA:a,playerB:b,round,group,bracketRound,status:'planned',legsA:0,legsB:0,winnerId:null,stats:null,createdAt:new Date().toISOString()};
+function newMatch(a,b,round=1,group=null,bracketRound=null,options={}) {
+  const stageKey = options.stageKey || null;
+  const knockout = Boolean(bracketRound);
+  return {
+    id:uid('m'),
+    playerA:a,
+    playerB:b,
+    round,
+    group,
+    bracketRound,
+    phase:options.phase || (knockout ? 'knockout' : (group ? 'group' : 'league')),
+    stageKey,
+    startScore:Number(options.startScore) || Number(state.settings.startScore) || 501,
+    legsToWin:Math.max(1, Number(options.legsToWin) || (knockout ? knockoutLegsForStage(stageKey) : Number(state.settings.legsToWin) || 2)),
+    status:'planned',
+    legsA:0,
+    legsB:0,
+    winnerId:null,
+    stats:null,
+    createdAt:new Date().toISOString()
+  };
 }
 
-function createKnockoutRound(ids, bracketRound) {
-  for(let i=0;i<ids.length;i+=2){
-    const a=ids[i], b=ids[i+1]||null;
-    const m=newMatch(a,b,bracketRound,null,bracketRound);
-    if(!b){m.status='completed';m.legsA=0;m.legsB=0;m.winnerId=a;m.bye=true;m.completedAt=new Date().toISOString();}
+function nextPowerOfTwo(value) {
+  let size = 2;
+  while (size < value) size *= 2;
+  return size;
+}
+
+function standardSeedOrder(size) {
+  let order = [1,2];
+  while (order.length < size) {
+    const sum = order.length * 2 + 1;
+    order = order.flatMap(seed => [seed, sum - seed]);
+  }
+  return order;
+}
+
+function avoidSameGroupFirstRound(slots, qualifierData = []) {
+  if (!qualifierData.length) return slots;
+  const groupByPlayer = new Map(qualifierData.map(item=>[item.playerId,item.group]));
+  const result = slots.slice();
+  const sameGroup = (a,b) => a && b && groupByPlayer.get(a) && groupByPlayer.get(a) === groupByPlayer.get(b);
+  for (let i=0;i<result.length;i+=2) {
+    const a=result[i], b=result[i+1];
+    if (!sameGroup(a,b)) continue;
+    let fixed=false;
+    for (let j=0;j<result.length;j+=2) {
+      if (j===i) continue;
+      const c=result[j], d=result[j+1];
+      if (d && !sameGroup(a,d) && !sameGroup(c,b)) {
+        [result[i+1],result[j+1]]=[result[j+1],result[i+1]];
+        fixed=true;
+        break;
+      }
+    }
+    if (!fixed) continue;
+  }
+  return result;
+}
+
+function createInitialKnockout(ids, qualifierData = []) {
+  const participants = ids.filter(Boolean);
+  if (participants.length < 2) return;
+  const size = nextPowerOfTwo(participants.length);
+  let slots = standardSeedOrder(size).map(seed => participants[seed-1] || null);
+  slots = avoidSameGroupFirstRound(slots, qualifierData);
+  state.knockout = {
+    status: 'active',
+    qualifiers: qualifierData,
+    bracketSize: size,
+    championId: null,
+    generatedAt: new Date().toISOString(),
+    completedAt: null
+  };
+  createKnockoutRoundFromSlots(slots, 1);
+}
+
+function createKnockoutRoundFromSlots(slots, bracketRound) {
+  const normalizedSlots = slots.length && (slots.length & (slots.length - 1)) === 0
+    ? slots.slice()
+    : [...slots, ...Array(nextPowerOfTwo(slots.length) - slots.length).fill(null)];
+  const stageKey = stageKeyForSize(normalizedSlots.length);
+  for(let i=0;i<normalizedSlots.length;i+=2){
+    const a=normalizedSlots[i] || null;
+    const b=normalizedSlots[i+1] || null;
+    if (!a && !b) continue;
+    const m=newMatch(a,b,bracketRound,null,bracketRound,{
+      phase:'knockout',
+      stageKey,
+      legsToWin:knockoutLegsForStage(stageKey)
+    });
+    if(!a || !b){
+      m.status='completed';
+      m.legsA=0;
+      m.legsB=0;
+      m.winnerId=a || b;
+      m.bye=true;
+      m.completedAt=new Date().toISOString();
+    }
     state.matches.push(m);
   }
   progressKnockout();
 }
 
+function progressGroupToKnockout() {
+  if(state.settings.format!=='groups') return null;
+  if(state.matches.some(m=>m.bracketRound)) return null;
+  const groupMatches=state.matches.filter(m=>m.phase==='group' || (m.group && !m.bracketRound));
+  if(!groupMatches.length || groupMatches.some(m=>m.status!=='completed')) return null;
+  const qualifiersPerGroup=Math.max(1,Number(state.settings.qualifiersPerGroup)||1);
+  const qualifierData=[];
+  for(const group of groupNames()){
+    const rows=computeStandings(group);
+    if(rows.length<qualifiersPerGroup) return null;
+    rows.slice(0,qualifiersPerGroup).forEach((row,index)=>qualifierData.push({
+      playerId:row.playerId,
+      group,
+      position:index+1,
+      points:row.points,
+      diff:row.diff,
+      legsFor:row.legsFor,
+      average:row.average
+    }));
+  }
+  qualifierData.sort((a,b)=>a.position-b.position || b.points-a.points || b.diff-a.diff || b.legsFor-a.legsFor || b.average-a.average || a.group.localeCompare(b.group,'pl'));
+  createInitialKnockout(qualifierData.map(item=>item.playerId),qualifierData);
+  return 'knockout-created';
+}
+
 function progressKnockout() {
-  if(state.settings.format!=='knockout') return;
-  const rounds=[...new Set(state.matches.map(m=>m.bracketRound).filter(Boolean))];
-  if(!rounds.length) return;
+  if(!['knockout','groups'].includes(state.settings.format)) return null;
+  const rounds=[...new Set(state.matches.filter(m=>m.bracketRound).map(m=>m.bracketRound))];
+  if(!rounds.length) return null;
   const latest=Math.max(...rounds);
   const current=state.matches.filter(m=>m.bracketRound===latest);
-  if(!current.length||current.some(m=>m.status!=='completed')) return;
-  if(state.matches.some(m=>m.bracketRound===latest+1)) return;
+  if(!current.length||current.some(m=>m.status!=='completed')) return null;
   const winners=current.map(m=>m.winnerId).filter(Boolean);
-  if(winners.length>1) createKnockoutRound(winners,latest+1);
+  if(winners.length===1){
+    state.knockout={
+      ...(state.knockout||{}),
+      status:'completed',
+      championId:winners[0],
+      completedAt:new Date().toISOString()
+    };
+    return 'knockout-completed';
+  }
+  if(state.matches.some(m=>m.bracketRound===latest+1)) return null;
+  createKnockoutRoundFromSlots(winners,latest+1);
+  return 'next-knockout-round';
+}
+
+function progressCompetition() {
+  const groupProgress = progressGroupToKnockout();
+  if (groupProgress) return groupProgress;
+  return progressKnockout();
 }
 
 function knockoutRoundLabel(round) {
-  const maxRound=Math.max(0,...state.matches.map(m=>m.bracketRound||0));
-  const remaining=maxRound-round;
-  if(maxRound && round===maxRound && state.matches.filter(m=>m.bracketRound===round).length===1) return 'Finał';
-  if(remaining===1 && state.matches.filter(m=>m.bracketRound===round).length===2) return 'Półfinał';
-  if(remaining===2 && state.matches.filter(m=>m.bracketRound===round).length===4) return 'Ćwierćfinał';
-  return `Runda ${round}`;
+  const match = state.matches.find(item=>item.bracketRound===round);
+  return knockoutStageLabel(match?.stageKey);
 }
 
 function shuffle(array) {
@@ -934,10 +1327,13 @@ function startMatch(id) {
 }
 
 function createLive(match) {
+  const startScore = matchStartScore(match);
+  const legsToWin = matchLegsToWin(match);
   return {
     matchId:match.id,playerA:match.playerA,playerB:match.playerB,
     initialStarterId:match.playerA,legStarterId:match.playerA,currentPlayerId:match.playerA,
-    remaining:{[match.playerA]:Number(state.settings.startScore),[match.playerB]:Number(state.settings.startScore)},
+    startScore,legsToWin,
+    remaining:{[match.playerA]:startScore,[match.playerB]:startScore},
     legs:{[match.playerA]:0,[match.playerB]:0},legNumber:1,visits:[],legRecords:[],undo:[],startedAt:new Date().toISOString()
   };
 }
@@ -945,24 +1341,37 @@ function createLive(match) {
 function manualResult(id) {
   if (!ensureCompetitionOpen()) return;
   const match=state.matches.find(m=>m.id===id); if(!match) return;
-  const a=prompt(`Liczba legów: ${playerName(match.playerA)}`, String(match.legsA||0)); if(a===null)return;
-  const b=prompt(`Liczba legów: ${playerName(match.playerB)}`, String(match.legsB||0)); if(b===null)return;
+  const target=matchLegsToWin(match);
+  const a=prompt(`Liczba legów: ${playerName(match.playerA)} (mecz do ${target})`, String(match.legsA||0)); if(a===null)return;
+  const b=prompt(`Liczba legów: ${playerName(match.playerB)} (mecz do ${target})`, String(match.legsB||0)); if(b===null)return;
   const la=Number(a),lb=Number(b);
   if(!Number.isInteger(la)||!Number.isInteger(lb)||la<0||lb<0) return toast('Podaj prawidłowe liczby legów');
-  if(state.settings.format==='knockout'&&la===lb) return toast('W turnieju pucharowym nie może być remisu');
+  if(match.bracketRound){
+    if(la===lb) return toast('W fazie pucharowej nie może być remisu');
+    if(Math.max(la,lb)!==target || Math.min(la,lb)>=target) return toast(`Zwycięzca tego etapu musi zdobyć dokładnie ${target} legów`);
+  }
   match.legsA=la;match.legsB=lb;match.status='completed';match.winnerId=la===lb?null:(la>lb?match.playerA:match.playerB);match.stats=null;match.completedAt=new Date().toISOString();
   if(state.live?.matchId===id) state.live=null;
-  progressKnockout();saveState();render();toast('Wynik zapisany');
+  const progress=progressCompetition();
+  saveState();render();
+  if(progress==='knockout-created') toast('Grupy zakończone — utworzono fazę pucharową');
+  else if(progress==='knockout-completed') toast(`Turniej wygrywa ${playerName(state.knockout.championId)}`);
+  else toast('Wynik zapisany');
 }
 
 function reopenMatch(id) {
   if (!ensureCompetitionOpen()) return;
   const match=state.matches.find(m=>m.id===id); if(!match)return;
   if(!confirm('Usunąć wynik i ponownie otworzyć mecz?'))return;
-  if(state.settings.format==='knockout'){
+  if(state.settings.format==='groups' && !match.bracketRound && state.matches.some(m=>m.bracketRound)){
+    if(!confirm('Zmiana wyniku grupowego usunie wygenerowaną fazę pucharową i utworzy ją ponownie po zamknięciu grup. Kontynuować?'))return;
+    state.matches=state.matches.filter(m=>!m.bracketRound);
+    state.knockout={status:'waiting',qualifiers:[],bracketSize:0,championId:null,generatedAt:null,completedAt:null};
+  } else if(match.bracketRound){
     const later=state.matches.filter(m=>(m.bracketRound||0)>(match.bracketRound||0));
     if(later.length&&!confirm('Zmiana wyniku w drabince usunie wszystkie późniejsze rundy. Kontynuować?'))return;
-    state.matches=state.matches.filter(m=>(m.bracketRound||0)<=(match.bracketRound||0));
+    state.matches=state.matches.filter(m=>!m.bracketRound || (m.bracketRound||0)<=(match.bracketRound||0));
+    state.knockout={...(state.knockout||{}),status:'active',championId:null,completedAt:null};
   }
   match.status='planned';match.legsA=0;match.legsB=0;match.winnerId=null;match.stats=null;delete match.completedAt;
   saveState();render();
@@ -981,7 +1390,7 @@ function submitScore(event) {
   const pid=live.currentPlayerId,before=live.remaining[pid],after=before-entered;
   const bust=entered>before||after<0||after===1;
   const checkout=!bust&&after===0;
-  if(checkout && live.legs[pid]+1>=Number(state.settings.legsToWin) && !confirm(`Checkout ${before}. Zakończyć mecz zwycięstwem ${playerName(pid)}?`)) return;
+  if(checkout && live.legs[pid]+1>=Number(live.legsToWin || 2) && !confirm(`Checkout ${before}. Zakończyć mecz zwycięstwem ${playerName(pid)}?`)) return;
   live.undo.push(snapshotLive());
   if(live.undo.length>50)live.undo.shift();
   const darts=checkout?Number($('#checkoutDarts').value||3):3;
@@ -992,12 +1401,12 @@ function submitScore(event) {
     const winnerDarts=live.visits.filter(v=>v.leg===live.legNumber&&v.playerId===pid).reduce((s,v)=>s+v.darts,0);
     live.legRecords.push({leg:live.legNumber,winnerId:pid,darts:winnerDarts,checkout:before});
     live.legs[pid]++;
-    if(live.legs[pid]>=Number(state.settings.legsToWin)){
+    if(live.legs[pid]>=Number(live.legsToWin || 2)){
       finalizeLiveMatch(pid);return;
     }
     live.legNumber++;
-    live.remaining[live.playerA]=Number(state.settings.startScore);
-    live.remaining[live.playerB]=Number(state.settings.startScore);
+    live.remaining[live.playerA]=Number(live.startScore || 501);
+    live.remaining[live.playerB]=Number(live.startScore || 501);
     const other=live.initialStarterId===live.playerA?live.playerB:live.playerA;
     live.legStarterId=live.legNumber%2===1?live.initialStarterId:other;
     live.currentPlayerId=live.legStarterId;
@@ -1017,7 +1426,12 @@ function finalizeLiveMatch(winnerId) {
     [live.playerA]:summarizeLivePlayer(live.playerA),
     [live.playerB]:summarizeLivePlayer(live.playerB)
   };
-  state.live=null;progressKnockout();saveState();route='matches';render();toast(`Mecz wygrywa ${playerName(winnerId)}`);
+  state.live=null;
+  const progress=progressCompetition();
+  saveState();route='matches';render();
+  if(progress==='knockout-created') toast('Mecz zakończony. Grupy zamknięte — utworzono fazę pucharową');
+  else if(progress==='knockout-completed') toast(`Turniej wygrywa ${playerName(winnerId)}`);
+  else toast(`Mecz wygrywa ${playerName(winnerId)}`);
 }
 
 function summarizeLivePlayer(pid) {
@@ -1051,7 +1465,7 @@ function livePlayerStats(pid) {
 function computeStandings(group='all') {
   const ids=state.players.filter(p=>group==='all'||p.group===group).map(p=>p.id);
   const rows=new Map(ids.map(id=>[id,{playerId:id,played:0,wins:0,draws:0,losses:0,legsFor:0,legsAgainst:0,diff:0,points:0,totalScore:0,totalDarts:0,average:0}]));
-  state.matches.filter(m=>m.status==='completed'&&!m.bye&&(group==='all'||m.group===group)).forEach(m=>{
+  state.matches.filter(m=>m.status==='completed'&&!m.bye&&(state.settings.format==='knockout'||!m.bracketRound)&&(group==='all'||m.group===group)).forEach(m=>{
     const a=rows.get(m.playerA),b=rows.get(m.playerB);if(!a||!b)return;
     a.played++;b.played++;a.legsFor+=m.legsA;a.legsAgainst+=m.legsB;b.legsFor+=m.legsB;b.legsAgainst+=m.legsA;
     if(m.legsA>m.legsB){a.wins++;b.losses++;a.points+=Number(state.settings.pointsWin);b.points+=Number(state.settings.pointsLoss||0);}else if(m.legsB>m.legsA){b.wins++;a.losses++;b.points+=Number(state.settings.pointsWin);a.points+=Number(state.settings.pointsLoss||0);}else{a.draws++;b.draws++;a.points+=Number(state.settings.pointsDraw);b.points+=Number(state.settings.pointsDraw);}
@@ -1111,7 +1525,8 @@ function importData(event) {
     if(!confirm('Import zastąpi całe obecne archiwum rozgrywek. Kontynuować?'))return;
     hub=nextHub;
     state=hub.competitions.find(c=>c.id===hub.activeCompetitionId)||hub.competitions[0];
-    saveHub();route='home';render();toast('Archiwum danych zaimportowane');
+    progressCompetition();
+    saveState();route='home';render();toast('Archiwum danych zaimportowane');
   }catch(e){console.error(e);toast('Nieprawidłowy plik kopii');}};reader.readAsText(file);
 }
 
@@ -1133,6 +1548,7 @@ async function installApp() {
 window.addEventListener('beforeinstallprompt',event=>{event.preventDefault();deferredInstallPrompt=event;updateInstallButton();});
 window.addEventListener('appinstalled',()=>{deferredInstallPrompt=null;toast('Aplikacja została zainstalowana');});
 
-if('serviceWorker' in navigator){window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js?v=1.1.1').catch(console.error));}
+if('serviceWorker' in navigator){window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js?v=1.2.0').catch(console.error));}
 
+if (progressCompetition()) saveState();
 render();

@@ -1,7 +1,7 @@
 {
   "name": "DartLiga PWA",
   "short_name": "DartLiga",
-  "description": "Licznik punktów X01 z archiwum wielu lig, grup i turniejów darta.",
+  "description": "Licznik X01 z ligami, grupami, automatyczną fazą pucharową, tabelami i archiwum rozgrywek.",
   "lang": "pl",
   "start_url": "./",
   "scope": "./",

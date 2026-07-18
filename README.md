@@ -1,31 +1,43 @@
-# 🎯 DartLiga PWA 1.1.1
+# 🎯 DartLiga PWA 1.2.0
 
-Aplikacja PWA do liczenia punktów w darcie oraz prowadzenia wielu niezależnych lig, faz grupowych i turniejów. Każda rozgrywka ma własnych zawodników, terminarz, wyniki, tabelę i statystyki.
+Aplikacja PWA do liczenia punktów w darcie oraz prowadzenia wielu niezależnych lig, turniejów i rozgrywek grupowych połączonych z automatyczną fazą pucharową.
 
 ## Najważniejsze funkcje
 
 - licznik X01: 301, 501, 701 i 1001,
-- mecze do wybranej liczby wygranych legów,
-- kontrola BUST i cofanie ostatniej wizyty,
-- liga „każdy z każdym”, faza grupowa i turniej pucharowy,
-- wiele równoległych rozgrywek,
-- archiwum rozgrywek aktywnych i zakończonych,
-- automatyczna tabela wyników i bilans legów,
+- wiele równoległych i archiwalnych rozgrywek,
+- liga „każdy z każdym”,
+- samodzielny turniej pucharowy,
+- grupy automatycznie połączone z fazą pucharową,
+- wybór liczby grup i liczby awansujących z każdej grupy,
+- automatyczne utworzenie drabinki po ostatnim meczu grupowym,
+- wyróżnienie miejsc premiowanych awansem w tabelach,
+- osobna liczba wygranych legów dla każdego etapu fazy pucharowej,
+- automatyczny awans zwycięzców do następnej rundy,
+- rozstawienie kwalifikantów i unikanie rewanżu z tej samej grupy w pierwszej rundzie, gdy jest to możliwe,
 - statystyki: średnia 3-dart, 100+, 140+, 180, High Out i Best Leg,
-- ręczne wpisywanie wyników,
 - eksport i import całego archiwum JSON,
-- zapis danych w `localStorage`,
+- zapis danych w przeglądarce,
 - instalacja jako PWA i działanie offline.
 
-## Bezpieczna obsługa wielu rozgrywek
+## Format „Grupy + faza pucharowa”
 
-Wersja 1.1.1 oddziela pojęcie **rozgrywki** od jej **formatu**.
+Podczas tworzenia rozgrywki ustalasz:
 
-- Nową ligę lub turniej tworzy się przyciskiem **+ Nowa rozgrywka**.
-- Wygenerowanie terminarza nie usuwa żadnej innej ligi ani turnieju.
-- Po utworzeniu terminarza format bieżącej rozgrywki jest blokowany, aby nie skasować wyników.
-- Przycisk **Nowa na podstawie** tworzy osobną rozgrywkę i kopiuje listę zawodników, ale nie kopiuje meczów ani wyników.
-- Terminarz z rozegranymi meczami nie może zostać nadpisany.
+- liczbę grup,
+- liczbę zawodników awansujących z każdej grupy,
+- liczbę wygranych legów w meczach grupowych,
+- liczbę wygranych legów osobno dla: 1/64, 1/32, 1/16, 1/8 finału, ćwierćfinału, półfinału i finału.
+
+Po zakończeniu wszystkich meczów grupowych aplikacja automatycznie:
+
+1. oblicza tabele grupowe,
+2. wybiera ustaloną liczbę najlepszych zawodników,
+3. tworzy drabinkę do najbliższej pełnej potęgi liczby 2,
+4. przydziela wolne losy najwyżej rozstawionym zawodnikom, jeśli są potrzebne,
+5. ustawia właściwy limit legów dla danego etapu.
+
+Przy równej liczbie punktów decydują kolejno: bilans legów, liczba wygranych legów, średnia 3-dart i nazwa zawodnika.
 
 ## Publikacja na GitHub Pages
 
@@ -36,7 +48,7 @@ Repozytorium zawiera workflow `.github/workflows/deploy-pages.yml`.
 3. Ustaw **Source: GitHub Actions**.
 4. Poczekaj na zielony status workflow **Publikacja DartLiga PWA** w zakładce **Actions**.
 
-Adres aplikacji będzie miał postać:
+Adres aplikacji:
 
 ```text
 https://TWOJ-LOGIN.github.io/DartLiga/
@@ -44,19 +56,9 @@ https://TWOJ-LOGIN.github.io/DartLiga/
 
 ## Aktualizacja istniejącej instalacji
 
-Wgraj i nadpisz pliki:
+Wgraj i nadpisz pliki z paczki aktualizacyjnej. Folder `.github` nie wymaga zmiany. Dane zapisane w przeglądarce zostają zachowane.
 
-```text
-app.js
-styles.css
-index.html
-sw.js
-README.md
-```
-
-Folder `.github` może pozostać bez zmian. Dane zapisane w przeglądarce są zachowywane, ponieważ klucz archiwum nie został zmieniony.
-
-Po publikacji otwórz aplikację ponownie. W lewym dolnym rogu powinien być widoczny numer **1.1.1**. Pliki `app.js` i `styles.css` mają numer wersji w adresie, dzięki czemu aktualizacja nie powinna utknąć w starym cache PWA.
+Po publikacji sprawdź numer **1.2.0** w lewym dolnym rogu aplikacji. W razie wyświetlania starej wersji wykonaj `Ctrl + F5` albo zamknij i ponownie uruchom zainstalowaną aplikację PWA.
 
 ## Uruchomienie lokalne
 
@@ -68,21 +70,6 @@ Następnie otwórz:
 
 ```text
 http://localhost:8080
-```
-
-## Struktura repozytorium
-
-```text
-.github/workflows/deploy-pages.yml  automatyczna publikacja
-icons/                             ikony PWA
-index.html                         główny plik strony
-styles.css                         wygląd aplikacji
-app.js                             logika aplikacji
-manifest.webmanifest               konfiguracja PWA
-sw.js                              cache i działanie offline
-.nojekyll                          wyłączenie Jekyll
-LICENSE                            licencja MIT
-README.md                          instrukcja
 ```
 
 ## Przechowywanie danych

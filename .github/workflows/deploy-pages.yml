@@ -2,7 +2,8 @@ name: Publikacja DartLiga PWA
 
 on:
   push:
-    branches: ["main"]
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
@@ -11,34 +12,29 @@ permissions:
   id-token: write
 
 concurrency:
-  group: "pages"
-  cancel-in-progress: false
+  group: pages
+  cancel-in-progress: true
 
 jobs:
   deploy:
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
+
     runs-on: ubuntu-latest
 
     steps:
-      - name: Pobierz repozytorium
+      - name: Pobranie repozytorium
         uses: actions/checkout@v6
 
-      - name: Skonfiguruj GitHub Pages
+      - name: Konfiguracja GitHub Pages
         uses: actions/configure-pages@v5
 
-      - name: Przygotuj pliki strony
-        run: |
-          mkdir -p _site/icons
-          cp index.html styles.css app.js manifest.webmanifest sw.js .nojekyll _site/
-          cp icons/*.png _site/icons/
-
-      - name: Prześlij pliki GitHub Pages
+      - name: Przygotowanie plików strony
         uses: actions/upload-pages-artifact@v4
         with:
-          path: ./_site
+          path: .
 
-      - name: Opublikuj stronę
+      - name: Publikacja strony
         id: deployment
         uses: actions/deploy-pages@v4

@@ -2,7 +2,7 @@
 
 const LEGACY_STORAGE_KEY = 'dartliga_pwa_state_v1';
 const STORAGE_KEY = 'dartliga_pwa_hub_v2';
-const APP_VERSION = '1.9.1';
+const APP_VERSION = '1.9.2';
 let route = 'home';
 let matchFilter = 'all';
 let tableGroup = 'all';

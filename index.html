@@ -13,7 +13,7 @@
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icons/icon-192.png">
   <link rel="apple-touch-icon" href="icons/icon-192.png">
-  <link rel="stylesheet" href="styles.css?v=1.9.1">
+  <link rel="stylesheet" href="styles.css?v=1.9.2">
 </head>
 <body>
   <div id="app"></div>
@@ -97,7 +97,7 @@
       const source = clean(hub || {});
       return {
         kind:'hub',
-        version:source.version || '1.9.1',
+        version:source.version || '1.9.2',
         activeCompetitionId:source.activeCompetitionId || null,
         singleMatches:Array.isArray(source.singleMatches) ? source.singleMatches : [],
         singleLive:source.singleLive || null,
@@ -378,6 +378,6 @@
       }
     });
   </script>
-  <script src="app.js?v=1.9.1"></script>
+  <script src="app.js?v=1.9.2"></script>
 </body>
 </html>

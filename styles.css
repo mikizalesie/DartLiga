@@ -986,3 +986,44 @@ body.tablet-mode #app{min-height:100vh}
     font-size:32px;
   }
 }
+
+
+/* Tablet queue fullscreen layout fix v1.9.2 */
+.tablet-queue-screen{
+  grid-template-columns:minmax(0,1fr);
+  width:min(100%,1600px);
+  margin-inline:auto;
+  min-width:0;
+}
+.tablet-queue-current,
+.tablet-queue-next,
+.tablet-queue-scoreboard{
+  width:100%;
+  min-width:0;
+}
+.tablet-queue-current{
+  overflow:hidden;
+}
+.tablet-queue-current-heading>div,
+.tablet-queue-next>div:last-child{
+  min-width:0;
+}
+.tablet-queue-current-heading h1,
+.tablet-queue-next>div:last-child>strong{
+  overflow-wrap:anywhere;
+}
+@media(min-width:1400px){
+  .tablet-queue-screen{
+    padding:clamp(24px,2.5vw,44px);
+    gap:clamp(16px,1.5vw,26px);
+  }
+  .tablet-queue-current{
+    padding:clamp(22px,2vw,34px);
+  }
+  .tablet-queue-scoreboard .tablet-score-player{
+    min-height:clamp(250px,34vh,390px);
+  }
+  .tablet-queue-next{
+    padding:18px 22px;
+  }
+}

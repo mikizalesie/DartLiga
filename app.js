@@ -2,7 +2,7 @@
 
 const LEGACY_STORAGE_KEY = 'dartliga_pwa_state_v1';
 const STORAGE_KEY = 'dartliga_pwa_hub_v2';
-const APP_VERSION = '1.6.0';
+const APP_VERSION = '1.6.1';
 let route = 'home';
 let matchFilter = 'all';
 let tableGroup = 'all';
@@ -32,6 +32,7 @@ function defaultCompetition(overrides = {}) {
       format: 'league',
       startScore: 501,
       legsToWin: 2,
+      setsToWin: 0,
       groupsCount: 2,
       qualifiersPerGroup: 2,
       knockoutLegs: {
@@ -110,11 +111,24 @@ function normalizeSingleLive(value) {
   const playerB = value.playerB || uid('single_b');
   const startScore = Math.max(2, Number(value.startScore) || 501);
   const legsToWin = Math.max(1, Number(value.legsToWin) || 2);
+  const setsToWin = Math.max(0, Number(value.setsToWin) || 0);
   const playerNames = {
     [playerA]: String(value.playerNames?.[playerA] || value.playerAName || 'Gracz 1'),
     [playerB]: String(value.playerNames?.[playerB] || value.playerBName || 'Gracz 2')
   };
   const starter = [playerA, playerB].includes(value.initialStarterId) ? value.initialStarterId : playerA;
+  const legs = {
+    [playerA]: Math.max(0, Number(value.legs?.[playerA]) || 0),
+    [playerB]: Math.max(0, Number(value.legs?.[playerB]) || 0)
+  };
+  const sets = {
+    [playerA]: Math.max(0, Number(value.sets?.[playerA]) || 0),
+    [playerB]: Math.max(0, Number(value.sets?.[playerB]) || 0)
+  };
+  const totalLegs = {
+    [playerA]: Math.max(0, Number(value.totalLegs?.[playerA]) || (setsToWin ? 0 : legs[playerA])),
+    [playerB]: Math.max(0, Number(value.totalLegs?.[playerB]) || (setsToWin ? 0 : legs[playerB]))
+  };
   return {
     ...value,
     mode: 'single',
@@ -128,15 +142,16 @@ function normalizeSingleLive(value) {
     currentPlayerId: [playerA, playerB].includes(value.currentPlayerId) ? value.currentPlayerId : starter,
     startScore,
     legsToWin,
+    setsToWin,
     doubleOut: value.doubleOut !== false,
     remaining: {
       [playerA]: Number(value.remaining?.[playerA]) >= 0 ? Number(value.remaining[playerA]) : startScore,
       [playerB]: Number(value.remaining?.[playerB]) >= 0 ? Number(value.remaining[playerB]) : startScore
     },
-    legs: {
-      [playerA]: Math.max(0, Number(value.legs?.[playerA]) || 0),
-      [playerB]: Math.max(0, Number(value.legs?.[playerB]) || 0)
-    },
+    legs,
+    sets,
+    totalLegs,
+    setNumber: Math.max(1, Number(value.setNumber) || 1),
     legNumber: Math.max(1, Number(value.legNumber) || 1),
     visits: Array.isArray(value.visits) ? value.visits : [],
     legRecords: Array.isArray(value.legRecords) ? value.legRecords : [],
@@ -157,9 +172,12 @@ function normalizeSingleMatchRecord(value = {}) {
     playerBName: String(value.playerBName || 'Gracz 2'),
     startScore: Math.max(2, Number(value.startScore) || 501),
     legsToWin: Math.max(1, Number(value.legsToWin) || 2),
+    setsToWin: Math.max(0, Number(value.setsToWin) || 0),
     doubleOut: value.doubleOut !== false,
     legsA: Math.max(0, Number(value.legsA) || 0),
     legsB: Math.max(0, Number(value.legsB) || 0),
+    setsA: Math.max(0, Number(value.setsA) || 0),
+    setsB: Math.max(0, Number(value.setsB) || 0),
     statsA: value.statsA || {},
     statsB: value.statsB || {},
     startedAt: value.startedAt || value.completedAt || new Date().toISOString(),
@@ -388,7 +406,20 @@ function normalizeCompetitionLive(value, match = {}, settings = {}) {
   if (!playerA || !playerB) return null;
   const startScore = Math.max(2, Number(value.startScore) || Number(match.startScore) || Number(settings.startScore) || 501);
   const legsToWin = Math.max(1, Number(value.legsToWin) || Number(match.legsToWin) || Number(settings.legsToWin) || 2);
+  const setsToWin = Math.max(0, Number(value.setsToWin ?? match.setsToWin ?? settings.setsToWin) || 0);
   const starter = [playerA, playerB].includes(value.initialStarterId) ? value.initialStarterId : playerA;
+  const legs = {
+    [playerA]: Math.max(0, Number(value.legs?.[playerA]) || 0),
+    [playerB]: Math.max(0, Number(value.legs?.[playerB]) || 0)
+  };
+  const sets = {
+    [playerA]: Math.max(0, Number(value.sets?.[playerA]) || 0),
+    [playerB]: Math.max(0, Number(value.sets?.[playerB]) || 0)
+  };
+  const totalLegs = {
+    [playerA]: Math.max(0, Number(value.totalLegs?.[playerA]) || (setsToWin ? 0 : legs[playerA])),
+    [playerB]: Math.max(0, Number(value.totalLegs?.[playerB]) || (setsToWin ? 0 : legs[playerB]))
+  };
   return {
     ...value,
     matchId: value.matchId || match.id,
@@ -399,15 +430,16 @@ function normalizeCompetitionLive(value, match = {}, settings = {}) {
     currentPlayerId: [playerA, playerB].includes(value.currentPlayerId) ? value.currentPlayerId : starter,
     startScore,
     legsToWin,
+    setsToWin,
     doubleOut: value.doubleOut !== undefined ? value.doubleOut !== false : settings.doubleOut !== false,
     remaining: {
       [playerA]: Number(value.remaining?.[playerA]) >= 0 ? Number(value.remaining[playerA]) : startScore,
       [playerB]: Number(value.remaining?.[playerB]) >= 0 ? Number(value.remaining[playerB]) : startScore
     },
-    legs: {
-      [playerA]: Math.max(0, Number(value.legs?.[playerA]) || 0),
-      [playerB]: Math.max(0, Number(value.legs?.[playerB]) || 0)
-    },
+    legs,
+    sets,
+    totalLegs,
+    setNumber: Math.max(1, Number(value.setNumber) || 1),
     legNumber: Math.max(1, Number(value.legNumber) || 1),
     visits: Array.isArray(value.visits) ? value.visits : [],
     legRecords: Array.isArray(value.legRecords) ? value.legRecords : [],
@@ -466,7 +498,12 @@ function normalizeMatch(match = {}, settings = {}) {
     phase: match.phase || (bracket ? 'knockout' : (match.group ? 'group' : 'league')),
     stageKey,
     startScore: Number(match.startScore) || Number(settings.startScore) || 501,
-    legsToWin: Number(match.legsToWin) || (bracket ? knockoutLegsForStage(stageKey, settings) : Number(settings.legsToWin) || 2)
+    legsToWin: Number(match.legsToWin) || (bracket ? knockoutLegsForStage(stageKey, settings) : Number(settings.legsToWin) || 2),
+    setsToWin: Math.max(0, Number(match.setsToWin ?? settings.setsToWin) || 0),
+    legsA: Math.max(0, Number(match.legsA) || 0),
+    legsB: Math.max(0, Number(match.legsB) || 0),
+    setsA: Math.max(0, Number(match.setsA) || 0),
+    setsB: Math.max(0, Number(match.setsB) || 0)
   };
   normalized.liveData = normalizeCompetitionLive(match.liveData, normalized, settings);
   return normalized;
@@ -652,19 +689,43 @@ function matchLegsToWin(match, settings = state?.settings || {}) {
   return Math.max(1, Number(match.legsToWin) || (match.bracketRound ? knockoutLegsForStage(match.stageKey, settings) : Number(settings.legsToWin) || 2));
 }
 
+function matchSetsToWin(match, settings = state?.settings || {}) {
+  return Math.max(0, Number(match?.setsToWin ?? settings.setsToWin) || 0);
+}
+
+function liveUsesSets(live) {
+  return Math.max(0, Number(live?.setsToWin) || 0) > 0;
+}
+
+function matchRuleText(legsToWin, setsToWin = 0) {
+  const legs = Math.max(1, Number(legsToWin) || 1);
+  const sets = Math.max(0, Number(setsToWin) || 0);
+  const legLabel = legs === 1 ? 'wygranego lega' : 'wygranych legów';
+  const setLabel = sets === 1 ? 'wygranego seta' : 'wygranych setów';
+  return sets > 0
+    ? `Pierwszy do ${sets} ${setLabel} · set do ${legs} ${legLabel}`
+    : `Pierwszy do ${legs} ${legLabel}`;
+}
+
 function matchStartScore(match, settings = state?.settings || {}) {
   return Number(match?.startScore) || Number(settings.startScore) || 501;
 }
 
 function competitionFormatSummary(competition = state) {
   const settings = competition.settings;
+  const setsToWin = Math.max(0, Number(settings.setsToWin) || 0);
   if (settings.format === 'groups') {
-    return `${settings.startScore} · grupy do ${settings.legsToWin} legów · awans ${settings.qualifiersPerGroup} z grupy · puchar z różnymi limitami legów`;
+    const rules = setsToWin > 0
+      ? `set do ${settings.legsToWin} legów · do ${setsToWin} setów`
+      : `do ${settings.legsToWin} legów`;
+    return `${settings.startScore} · grupy ${rules} · awans ${settings.qualifiersPerGroup} z grupy · puchar z różnymi limitami legów`;
   }
   if (settings.format === 'knockout') {
-    return `${settings.startScore} · liczba legów zależna od etapu`; 
+    return `${settings.startScore} · liczba legów zależna od etapu${setsToWin > 0 ? ` · do ${setsToWin} setów` : ''}`;
   }
-  return `${settings.startScore} · do ${settings.legsToWin} wygranych legów`;
+  return setsToWin > 0
+    ? `${settings.startScore} · set do ${settings.legsToWin} legów · do ${setsToWin} setów`
+    : `${settings.startScore} · do ${settings.legsToWin} wygranych legów`;
 }
 
 function statusBadge(status) {
@@ -835,11 +896,12 @@ function renderHome() {
         <div class="field"><label>Format</label><select name="format" id="newCompetitionFormat"><option value="league">Liga – każdy z każdym</option><option value="groups">Grupy + faza pucharowa</option><option value="knockout">Turniej pucharowy</option></select></div>
         <div class="field"><label>Data rozpoczęcia</label><input type="datetime-local" name="startedAt" value="${localDateTimeValue()}"></div>
         <div class="field"><label>Punkty startowe</label><select name="startScore">${[301,501,701,1001].map(v=>`<option ${v===501?'selected':''}>${v}</option>`).join('')}</select></div>
-        <div class="field" data-league-groups-field><label>Wygrane legi w lidze / grupach</label><input type="number" name="legsToWin" min="1" max="15" value="${defaults.legsToWin}"></div>
+        <div class="field" data-league-groups-field><label>Wygrane legi w meczu / secie</label><input type="number" name="legsToWin" min="1" max="15" value="${defaults.legsToWin}"><small class="field-help">Przy grze setowej jest to liczba legów potrzebnych do wygrania seta.</small></div>
+        <div class="field"><label>Wygrane sety do zwycięstwa</label><input type="number" name="setsToWin" min="0" max="15" value="${defaults.setsToWin || 0}"><small class="field-help">Wpisz 0, aby grać wyłącznie na legi jak dotychczas.</small></div>
         <div class="field" data-groups-field hidden><label>Liczba grup</label><input type="number" name="groupsCount" min="2" max="12" value="${defaults.groupsCount}"></div>
         <div class="field" data-groups-field hidden><label>Awans z każdej grupy</label><input type="number" name="qualifiersPerGroup" min="1" max="16" value="${defaults.qualifiersPerGroup}"><small class="field-help">Tylu najlepszych zawodników z każdej grupy przejdzie automatycznie do drabinki.</small></div>
         <div class="wide knockout-settings-panel" data-knockout-fields hidden>
-          <div class="section-head"><div><h3>Wygrane legi w fazie pucharowej</h3><p class="muted">Każdy etap może mieć inną długość meczu.</p></div></div>
+          <div class="section-head"><div><h3>Wygrane legi w fazie pucharowej</h3><p class="muted">Każdy etap może mieć inną długość. Przy grze setowej podana liczba dotyczy jednego seta.</p></div></div>
           ${knockoutLegFields(defaults.knockoutLegs)}
         </div>
         <div class="wide"><button class="btn primary" type="submit">Utwórz i przejdź do zawodników</button></div>
@@ -924,7 +986,7 @@ function renderCompetition() {
   const structureLocked = hasSchedule;
   return `
     ${pageHeader('Konfiguracja', 'Rozgrywki i zawodnicy', 'Dla formatu grupowego aplikacja automatycznie utworzy fazę pucharową po zakończeniu wszystkich meczów grupowych.', `<button class="btn ghost" data-route="home">Moje rozgrywki</button><button class="btn primary" data-new-competition>+ Nowa rozgrywka</button><button class="btn info" id="loadDemo">Wczytaj dane demo</button>`)}
-    ${hasSchedule ? `<div class="note safe-note"><strong>Zasady tej rozgrywki są zablokowane po wygenerowaniu terminarza.</strong> Dzięki temu liczba grup, awansów i limit legów w poszczególnych etapach nie zmieni się w trakcie zawodów.</div>` : ''}
+    ${hasSchedule ? `<div class="note safe-note"><strong>Zasady tej rozgrywki są zablokowane po wygenerowaniu terminarza.</strong> Dzięki temu liczba grup, awansów, setów i limit legów w poszczególnych etapach nie zmieni się w trakcie zawodów.</div>` : ''}
     <div class="grid two" style="margin-top:${hasSchedule ? '16px' : '0'}">
       <section class="card">
         <div class="section-head"><h2>Ustawienia rozgrywki</h2><span class="badge">${formatLabel(format)}</span></div>
@@ -936,13 +998,14 @@ function renderCompetition() {
             <option value="knockout" ${format==='knockout'?'selected':''}>Turniej pucharowy</option>
           </select></div>
           <div class="field"><label>Punkty startowe</label><select name="startScore" ${structureLocked?'disabled':''}>${[301,501,701,1001].map(v=>`<option ${Number(state.settings.startScore)===v?'selected':''}>${v}</option>`).join('')}</select></div>
-          <div class="field" data-current-league-groups ${format==='knockout'?'hidden':''}><label>Wygrane legi w lidze / grupach</label><input type="number" name="legsToWin" min="1" max="15" value="${state.settings.legsToWin}" ${structureLocked?'disabled':''}></div>
+          <div class="field" data-current-league-groups ${format==='knockout'?'hidden':''}><label>Wygrane legi w meczu / secie</label><input type="number" name="legsToWin" min="1" max="15" value="${state.settings.legsToWin}" ${structureLocked?'disabled':''}><small class="field-help">Przy grze setowej jest to liczba legów potrzebnych do wygrania seta.</small></div>
+          <div class="field"><label>Wygrane sety do zwycięstwa</label><input type="number" name="setsToWin" min="0" max="15" value="${Math.max(0,Number(state.settings.setsToWin)||0)}" ${structureLocked?'disabled':''}><small class="field-help">0 = mecz wyłącznie na legi. Wartość większa od 0 włącza sety.</small></div>
           <div class="field" data-current-groups ${format==='groups'?'':'hidden'}><label>Liczba grup</label><input type="number" name="groupsCount" min="2" max="12" value="${state.settings.groupsCount}" ${structureLocked?'disabled':''}></div>
           <div class="field" data-current-groups ${format==='groups'?'':'hidden'}><label>Awans z każdej grupy</label><input type="number" name="qualifiersPerGroup" min="1" max="16" value="${state.settings.qualifiersPerGroup}" ${structureLocked?'disabled':''}><small class="field-help">Po zakończeniu grup aplikacja wybierze tyle najwyżej sklasyfikowanych osób z każdej grupy.</small></div>
           <div class="field" data-current-points ${format==='knockout'?'hidden':''}><label>Punkty za zwycięstwo</label><input type="number" name="pointsWin" min="0" max="10" value="${state.settings.pointsWin}"></div>
           <div class="field" data-current-points ${format==='knockout'?'hidden':''}><label>Punkty za remis</label><input type="number" name="pointsDraw" min="0" max="10" value="${state.settings.pointsDraw}"></div>
           <div class="wide knockout-settings-panel" data-current-knockout ${format==='league'?'hidden':''}>
-            <div class="section-head"><div><h3>Wygrane legi w fazie pucharowej</h3><p class="muted">Ustaw osobno każdy możliwy etap. Aplikacja wykorzysta tylko etapy potrzebne dla liczby zakwalifikowanych zawodników.</p></div></div>
+            <div class="section-head"><div><h3>Wygrane legi w fazie pucharowej</h3><p class="muted">Ustaw osobno każdy możliwy etap. Przy grze setowej liczba oznacza legi potrzebne do wygrania jednego seta.</p></div></div>
             ${knockoutLegFields(state.settings.knockoutLegs, structureLocked)}
           </div>
           <div class="wide row-actions"><button class="btn primary" type="submit">Zapisz ustawienia</button><button class="btn ghost" type="button" id="duplicateCurrentCompetition">Utwórz nową na podstawie tej</button></div>
@@ -1014,7 +1077,7 @@ function allLiveEntries() {
         matchId:match.id,
         title:competition.settings?.competitionName || 'Rozgrywka',
         subtitle:`${formatLabel(competition.settings?.format)} · ${roundLabel}`,
-        rules:`Pierwszy do ${live.legsToWin || matchLegsToWin(match, competition.settings)} legów`,
+        rules:matchRuleText(live.legsToWin || matchLegsToWin(match, competition.settings), live.setsToWin ?? matchSetsToWin(match, competition.settings)),
         live,
         playerAName:competitionPlayerName(competition, live.playerA),
         playerBName:competitionPlayerName(competition, live.playerB),
@@ -1029,7 +1092,7 @@ function allLiveEntries() {
       kind:'single',
       title:live.title || 'Pojedynczy mecz',
       subtitle:'Pojedynczy mecz',
-      rules:`Pierwszy do ${live.legsToWin || 1} legów`,
+      rules:matchRuleText(live.legsToWin || 1, live.setsToWin || 0),
       live,
       playerAName:live.playerNames?.[live.playerA] || 'Gracz 1',
       playerBName:live.playerNames?.[live.playerB] || 'Gracz 2',
@@ -1057,23 +1120,66 @@ function liveKindLabel(kind) {
   return kind === 'competition' ? 'Liga / turniej' : kind === 'single' ? 'Pojedynczy mecz' : 'Trening';
 }
 
+function liveStarterGraphic() {
+  return `<span class="live-starter-graphic" title="Rozpoczynał aktualnego lega" aria-label="Rozpoczynał aktualnego lega">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"></circle><circle cx="12" cy="12" r="2.4"></circle><path d="M5 19L18.2 5.8M14.3 5.8h3.9v3.9"></path></svg>
+  </span>`;
+}
+
+function liveTurnGraphic() {
+  return `<span class="live-turn-graphic" title="Aktualnie rzuca" aria-label="Aktualnie rzuca">
+    <svg viewBox="0 0 28 20" aria-hidden="true"><path d="M3 10h15"></path><path d="M14 4l7 6-7 6"></path><path d="M5 6l-3 4 3 4"></path></svg>
+  </span>`;
+}
+
+function liveOpenGraphic() {
+  return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 16L16 8"></path><path d="M10 8h6v6"></path><path d="M17 13v5H6V7h5"></path></svg>`;
+}
+
+function liveCheckoutRoute(live) {
+  if (!live?.currentPlayerId) return null;
+  const evaluation = evaluatePendingVisit(live);
+  if (evaluation.bust) return null;
+  if (evaluation.checkout) return (live.pendingDarts || []).map(dart=>dart.label);
+  const dartsLeft = Math.max(0, 3 - (live.pendingDarts || []).length);
+  if (!dartsLeft) return null;
+  return checkoutSuggestion(evaluation.remainingAfter, dartsLeft, live.doubleOut !== false);
+}
+
 function liveEntryCard(entry) {
   const live = entry.live;
   const statsA = genericLiveStats(live, live.playerA);
   const statsB = genericLiveStats(live, live.playerB);
   const currentA = live.currentPlayerId === live.playerA;
   const currentB = live.currentPlayerId === live.playerB;
+  const starterA = live.legStarterId === live.playerA;
+  const starterB = live.legStarterId === live.playerB;
+  const setsMode = liveUsesSets(live);
+  const checkoutRoute = liveCheckoutRoute(live);
   const action = entry.kind === 'competition'
-    ? `<button class="live-open-btn" data-live-competition="${entry.competitionId}" data-live-match="${entry.matchId}" aria-label="Otwórz punktację">▶</button>`
+    ? `<button class="live-open-btn" data-live-competition="${entry.competitionId}" data-live-match="${entry.matchId}" aria-label="Otwórz punktację" title="Otwórz punktację">${liveOpenGraphic()}</button>`
     : entry.kind === 'single'
-      ? `<button class="live-open-btn" data-live-single aria-label="Otwórz punktację">▶</button>`
-      : `<button class="live-open-btn" data-live-training aria-label="Otwórz trening">▶</button>`;
+      ? `<button class="live-open-btn" data-live-single aria-label="Otwórz punktację" title="Otwórz punktację">${liveOpenGraphic()}</button>`
+      : `<button class="live-open-btn" data-live-training aria-label="Otwórz trening" title="Otwórz trening">${liveOpenGraphic()}</button>`;
+  const row = (playerId, name, stats, current, starter) => `<div class="live-player-row ${setsMode?'with-sets':''} ${current?'throwing':''}">
+    <div class="live-player-main">
+      <div class="live-player-icons">${starter?liveStarterGraphic():''}${current?liveTurnGraphic():''}</div>
+      <div class="live-player-copy"><strong>${esc(name)}</strong><small>śr. ${fmt(stats.average)} · ostatnia ${stats.last}</small></div>
+    </div>
+    ${setsMode?`<b class="live-set-score">${live.sets?.[playerId] || 0}</b>`:''}
+    <b class="live-leg-score">${live.legs?.[playerId] || 0}</b>
+    <em class="live-points-score">${live.remaining?.[playerId] ?? live.startScore ?? 501}</em>
+  </div>`;
   return `<article class="live-match-card">
     <div class="live-match-head"><div><span class="live-dot">LIVE</span><strong>${esc(entry.rules)}</strong></div><span>${esc(entry.title)}</span></div>
-    <div class="live-match-context"><span>${esc(entry.subtitle)}</span><small>${live.startScore || 501} · Leg ${live.legNumber || 1}</small></div>
-    <div class="live-player-row ${currentA?'throwing':''}"><div class="live-player-main"><i></i><strong>${esc(entry.playerAName)}</strong><small>śr. ${fmt(statsA.average)} · ostatnia ${statsA.last}</small></div><b>${live.legs?.[live.playerA] || 0}</b><em>${live.remaining?.[live.playerA] ?? live.startScore ?? 501}</em></div>
-    <div class="live-player-row ${currentB?'throwing':''}"><div class="live-player-main"><i></i><strong>${esc(entry.playerBName)}</strong><small>śr. ${fmt(statsB.average)} · ostatnia ${statsB.last}</small></div><b>${live.legs?.[live.playerB] || 0}</b><em>${live.remaining?.[live.playerB] ?? live.startScore ?? 501}</em>${action}</div>
-    <div class="live-match-foot"><span>${liveKindLabel(entry.kind)}</span><small>Aktualizacja: ${formatDateTime(entry.updatedAt)}</small></div>
+    <div class="live-match-context">
+      <span>${esc(entry.subtitle)}</span>
+      <div class="live-column-labels ${setsMode?'with-sets':''}">${setsMode?'<small>Sety</small>':''}<small>Legi</small><small>Punkty</small></div>
+    </div>
+    ${row(live.playerA,entry.playerAName,statsA,currentA,starterA)}
+    ${row(live.playerB,entry.playerBName,statsB,currentB,starterB)}
+    ${checkoutRoute ? `<div class="live-checkout-hint"><span>Checkout</span><strong>${checkoutRoute.map(esc).join(' · ')}</strong></div>` : ''}
+    <div class="live-match-foot"><span>${liveKindLabel(entry.kind)}</span><small>Leg ${live.legNumber || 1}${setsMode?` · Set ${live.setNumber || 1}`:''} · ${formatDateTime(entry.updatedAt)}</small>${action}</div>
   </article>`;
 }
 
@@ -1150,8 +1256,13 @@ function matchRow(m) {
   const a = playerName(m.playerA), b = playerName(m.playerB);
   const roundLabel = m.bracketRound ? knockoutStageLabel(m.stageKey) : `Kolejka ${m.round || 1}`;
   const group = m.group ? ` · Grupa ${esc(m.group)}` : '';
-  const target = ` · do ${matchLegsToWin(m)} legów`;
-  const result = m.status === 'completed' ? `<span class="score-pill">${m.legsA}:${m.legsB}</span>` : '<span class="muted">vs</span>';
+  const setsToWin = matchSetsToWin(m);
+  const target = ` · ${matchRuleText(matchLegsToWin(m), setsToWin)}`;
+  const result = m.status === 'completed'
+    ? (setsToWin > 0
+      ? `<span class="score-pill score-pill-sets"><strong>${m.setsA||0}:${m.setsB||0}</strong><small>legi ${m.legsA||0}:${m.legsB||0}</small></span>`
+      : `<span class="score-pill">${m.legsA}:${m.legsB}</span>`)
+    : '<span class="muted">vs</span>';
   const startLabel = m.status === 'live' ? 'Otwórz LIVE' : 'Licz punkty';
   return `<div class="match-row"><div><div class="match-meta">${roundLabel}${group}${target}</div>${statusBadge(m.status)}</div><div class="match-pair"><span class="${m.winnerId===m.playerA?'winner':''}">${esc(a)}</span>${result}<span class="${m.winnerId===m.playerB?'winner':''}">${esc(b)}</span></div><div class="row-actions">
     ${m.status !== 'completed' ? `<button class="btn small primary start-match" data-id="${m.id}">${startLabel}</button><button class="btn small ghost manual-result" data-id="${m.id}">Wpisz wynik</button>` : `<button class="btn small ghost reopen-match" data-id="${m.id}">Popraw</button>`}
@@ -1215,8 +1326,15 @@ function renderBracketPage() {
 function renderBracketRound(round) {
   const matches = state.matches.filter(m=>m.bracketRound===round);
   const stage = matches[0]?.stageKey;
-  const target = matches[0] ? matchLegsToWin(matches[0]) : 0;
-  return `<div class="bracket-round"><h3>${knockoutStageLabel(stage)}</h3><div class="bracket-target">do ${target} wygranych legów</div>${matches.map(m=>`<div class="bracket-match"><div class="bracket-line ${m.winnerId===m.playerA?'winner':''}"><span>${esc(playerName(m.playerA))}</span><b>${m.status==='completed'?(m.legsA??''):'–'}</b></div><div class="bracket-line ${m.winnerId===m.playerB?'winner':''}"><span>${esc(playerName(m.playerB))}</span><b>${m.status==='completed'?(m.legsB??''):'–'}</b></div>${m.bye?'<div class="match-meta">Wolny los</div>':''}</div>`).join('')}</div>`;
+  const legTarget = matches[0] ? matchLegsToWin(matches[0]) : 0;
+  const setTarget = matches[0] ? matchSetsToWin(matches[0]) : 0;
+  return `<div class="bracket-round"><h3>${knockoutStageLabel(stage)}</h3><div class="bracket-target">${matchRuleText(legTarget,setTarget)}</div>${matches.map(m=>{
+    const setsMode=matchSetsToWin(m)>0;
+    const aScore=m.status==='completed'?(setsMode?(m.setsA??0):(m.legsA??0)):'–';
+    const bScore=m.status==='completed'?(setsMode?(m.setsB??0):(m.legsB??0)):'–';
+    const legInfo=setsMode&&m.status==='completed'?`<div class="match-meta bracket-leg-total">Legi ${m.legsA||0}:${m.legsB||0}</div>`:'';
+    return `<div class="bracket-match"><div class="bracket-line ${m.winnerId===m.playerA?'winner':''}"><span>${esc(playerName(m.playerA))}</span><b>${aScore}</b></div><div class="bracket-line ${m.winnerId===m.playerB?'winner':''}"><span>${esc(playerName(m.playerB))}</span><b>${bScore}</b></div>${legInfo}${m.bye?'<div class="match-meta">Wolny los</div>':''}</div>`;
+  }).join('')}</div>`;
 }
 
 function renderStats() {
@@ -1244,7 +1362,7 @@ function renderSingleMatch() {
         <div>
           <div class="eyebrow">Mecz w trakcie</div>
           <h2>${esc(live.title || 'Pojedynczy mecz')}</h2>
-          <p class="muted">${esc(live.playerNames?.[live.playerA] || 'Gracz 1')} vs ${esc(live.playerNames?.[live.playerB] || 'Gracz 2')} · ${live.startScore} · pierwszy do ${live.legsToWin} wygranych legów · ${live.doubleOut !== false ? 'Double Out' : 'Straight Out'}</p>
+          <p class="muted">${esc(live.playerNames?.[live.playerA] || 'Gracz 1')} vs ${esc(live.playerNames?.[live.playerB] || 'Gracz 2')} · ${live.startScore} · ${matchRuleText(live.legsToWin, live.setsToWin)} · ${live.doubleOut !== false ? 'Double Out' : 'Straight Out'}</p>
         </div>
         <div class="row-actions">
           <button class="btn primary" id="resumeSingleMatchCard">Wróć do licznika</button>
@@ -1252,9 +1370,9 @@ function renderSingleMatch() {
         </div>
       </div>
       <div class="single-live-score">
-        <div><span>${esc(live.playerNames?.[live.playerA] || 'Gracz 1')}</span><strong>${live.legs?.[live.playerA] || 0}</strong><small>pozostało ${live.remaining?.[live.playerA] ?? live.startScore}</small></div>
+        <div><span>${esc(live.playerNames?.[live.playerA] || 'Gracz 1')}</span><strong>${liveUsesSets(live) ? (live.sets?.[live.playerA] || 0) : (live.legs?.[live.playerA] || 0)}</strong><small>${liveUsesSets(live) ? `sety · legi ${live.legs?.[live.playerA] || 0}` : 'legi'} · pozostało ${live.remaining?.[live.playerA] ?? live.startScore}</small></div>
         <div class="single-live-vs">:</div>
-        <div><span>${esc(live.playerNames?.[live.playerB] || 'Gracz 2')}</span><strong>${live.legs?.[live.playerB] || 0}</strong><small>pozostało ${live.remaining?.[live.playerB] ?? live.startScore}</small></div>
+        <div><span>${esc(live.playerNames?.[live.playerB] || 'Gracz 2')}</span><strong>${liveUsesSets(live) ? (live.sets?.[live.playerB] || 0) : (live.legs?.[live.playerB] || 0)}</strong><small>${liveUsesSets(live) ? `sety · legi ${live.legs?.[live.playerB] || 0}` : 'legi'} · pozostało ${live.remaining?.[live.playerB] ?? live.startScore}</small></div>
       </div>
     </section>` : ''}
 
@@ -1299,8 +1417,15 @@ function renderSingleMatch() {
           </div>
 
           <div class="field">
-            <label>Wygrane legi do zwycięstwa</label>
+            <label>Wygrane legi w meczu / secie</label>
             <input type="number" name="legsToWin" min="1" max="25" value="3" required>
+            <small class="field-help">Przy grze setowej jest to liczba legów potrzebnych do wygrania seta.</small>
+          </div>
+
+          <div class="field">
+            <label>Wygrane sety do zwycięstwa</label>
+            <input type="number" name="setsToWin" min="0" max="15" value="0" required>
+            <small class="field-help">0 = mecz rozgrywany tylko na legi.</small>
           </div>
 
           <div class="field">
@@ -1356,7 +1481,10 @@ function renderSingleMatch() {
 }
 
 function singleHistoryRow(item) {
-  const winner = item.winnerName || (item.legsA > item.legsB ? item.playerAName : item.playerBName);
+  const setsMode = Math.max(0, Number(item.setsToWin) || 0) > 0;
+  const winner = item.winnerName || (setsMode
+    ? (item.setsA > item.setsB ? item.playerAName : item.playerBName)
+    : (item.legsA > item.legsB ? item.playerAName : item.playerBName));
   return `<article class="single-history-row">
     <div class="single-history-date">
       <span>Zakończono</span>
@@ -1369,12 +1497,13 @@ function singleHistoryRow(item) {
       </div>
       <div class="single-history-result">
         <span class="${winner===item.playerAName?'winner':''}">${esc(item.playerAName)}</span>
-        <strong>${item.legsA}:${item.legsB}</strong>
+        <strong>${setsMode ? `${item.setsA}:${item.setsB}` : `${item.legsA}:${item.legsB}`}</strong>
         <span class="${winner===item.playerBName?'winner':''}">${esc(item.playerBName)}</span>
       </div>
       <div class="competition-meta">
         <span>${item.startScore} punktów</span>
-        <span>do ${item.legsToWin} legów</span>
+        <span>${matchRuleText(item.legsToWin, item.setsToWin)}</span>
+        ${setsMode ? `<span>Legi łącznie: ${item.legsA}:${item.legsB}</span>` : ''}
         <span>${item.doubleOut !== false ? 'Double Out' : 'Straight Out'}</span>
         <span>Śr. ${fmt(item.statsA?.average)} / ${fmt(item.statsB?.average)}</span>
         <span>180: ${Number(item.statsA?.h180 || 0)} / ${Number(item.statsB?.h180 || 0)}</span>
@@ -1629,6 +1758,8 @@ function renderScorer() {
   }
   const match = standalone || dartbotTraining ? null : state.matches.find(m=>m.id===live.matchId);
   if (!standalone && !dartbotTraining && !match) return `<section class="card">${empty('Nie znaleziono meczu','Wróć do terminarza.')}</section>`;
+  const setMode = !dartbotTraining && liveUsesSets(live);
+  const setsToWin = setMode ? Math.max(1, Number(live.setsToWin) || 1) : 0;
   const statsA = livePlayerStats(live.playerA, live);
   const statsB = livePlayerStats(live.playerB, live);
   const visits = (live.visits || []).slice().reverse();
@@ -1657,14 +1788,18 @@ function renderScorer() {
     ${pageHeader(
       dartbotTraining ? 'Trening meczowy' : 'Licznik X01',
       `${esc(scorerPlayerName(live.playerA))} vs ${esc(scorerPlayerName(live.playerB))}`,
-      `${live.startScore || (standalone ? 501 : (dartbotTraining ? Number(hub.trainingLive?.settings?.startScore)||501 : matchStartScore(match)))} · ${dartbotTraining ? `sesja ${Number(hub.trainingLive?.settings?.legsCount)||5} legów` : `pierwszy do ${live.legsToWin || (standalone ? 1 : matchLegsToWin(match))} wygranych legów`} · ${contextLabel}`,
+      `${live.startScore || (standalone ? 501 : (dartbotTraining ? Number(hub.trainingLive?.settings?.startScore)||501 : matchStartScore(match)))} · ${dartbotTraining ? `sesja ${Number(hub.trainingLive?.settings?.legsCount)||5} legów` : matchRuleText(live.legsToWin || (standalone ? 1 : matchLegsToWin(match)), setsToWin)} · ${contextLabel}`,
       headerActions
     )}
     <div class="scorer ${dartbotTraining?'dartbot-scorer':''}">
       ${dartbotTraining ? renderDartbotScorerInfo(live) : ''}
       <div class="scoreboard">
         ${scorePlayer(live.playerA, statsA)}
-        <div class="versus"><div><div class="leg-label">Legi</div><div class="legs-big">${live.legs[live.playerA]} : ${live.legs[live.playerB]}</div><div class="muted">Leg ${live.legNumber}</div></div></div>
+        <div class="versus"><div class="match-score-center">
+          ${setMode ? `<div class="score-center-line"><span>Sety</span><strong>${live.sets?.[live.playerA] || 0} : ${live.sets?.[live.playerB] || 0}</strong></div>` : ''}
+          <div class="score-center-line"><span>Legi</span><strong>${live.legs[live.playerA]} : ${live.legs[live.playerB]}</strong></div>
+          <div class="muted">${setMode ? `Set ${live.setNumber || 1} · ` : ''}Leg ${live.legNumber}</div>
+        </div></div>
         ${scorePlayer(live.playerB, statsB)}
       </div>
       ${dartbotTraining && !playerCanThrow ? renderDartbotTurnHint(live) : renderCheckoutHint(live, evaluation)}
@@ -1716,7 +1851,14 @@ function renderScorer() {
 }
 function scorePlayer(playerId, stats) {
   const live = scorerLive();
-  return `<div class="score-player ${live.currentPlayerId===playerId?'active':''}"><div class="score-player-name">${esc(scorerPlayerName(playerId))}</div><div class="remaining">${live.remaining[playerId]}</div><div class="score-stats"><div><b>${fmt(stats.average)}</b><span>średnia</span></div><div><b>${stats.darts}</b><span>lotki</span></div><div><b>${stats.last ?? '—'}</b><span>ostatnia</span></div></div></div>`;
+  const current = live.currentPlayerId===playerId;
+  const starter = live.legStarterId===playerId;
+  return `<div class="score-player ${current?'active':''}">
+    <div class="score-player-graphics">${starter?liveStarterGraphic():''}${current?liveTurnGraphic():''}</div>
+    <div class="score-player-name">${esc(scorerPlayerName(playerId))}</div>
+    <div class="remaining">${live.remaining[playerId]}</div>
+    <div class="score-stats"><div><b>${fmt(stats.average)}</b><span>średnia</span></div><div><b>${stats.darts}</b><span>lotki</span></div><div><b>${stats.last ?? '—'}</b><span>ostatnia</span></div></div>
+  </div>`;
 }
 
 function bindCurrentPage() {
@@ -1876,6 +2018,7 @@ function settingsFromForm(data) {
     format: String(data.get('format') || state.settings.format || 'league'),
     startScore: Number(data.get('startScore')) || Number(state.settings.startScore) || 501,
     legsToWin: Math.max(1, Number(data.get('legsToWin')) || Number(state.settings.legsToWin) || 2),
+    setsToWin: Math.max(0, Number(data.get('setsToWin') ?? state.settings.setsToWin) || 0),
     groupsCount: Math.max(2, Number(data.get('groupsCount')) || Number(state.settings.groupsCount) || 2),
     qualifiersPerGroup: Math.max(1, Number(data.get('qualifiersPerGroup')) || Number(state.settings.qualifiersPerGroup) || 1),
     knockoutLegs: knockoutLegsFromForm(data, state.settings.knockoutLegs),
@@ -1897,6 +2040,7 @@ function createCompetition(event) {
       format: String(data.get('format') || 'league'),
       startScore: Number(data.get('startScore')) || 501,
       legsToWin: Math.max(1, Number(data.get('legsToWin')) || 2),
+      setsToWin: Math.max(0, Number(data.get('setsToWin')) || 0),
       groupsCount: Math.max(2, Number(data.get('groupsCount')) || 2),
       qualifiersPerGroup: Math.max(1, Number(data.get('qualifiersPerGroup')) || 2),
       knockoutLegs: knockoutLegsFromForm(data, defaultCompetition().settings.knockoutLegs)
@@ -2160,9 +2304,12 @@ function newMatch(a,b,round=1,group=null,bracketRound=null,options={}) {
     stageKey,
     startScore:Number(options.startScore) || Number(state.settings.startScore) || 501,
     legsToWin:Math.max(1, Number(options.legsToWin) || (knockout ? knockoutLegsForStage(stageKey) : Number(state.settings.legsToWin) || 2)),
+    setsToWin:Math.max(0, Number(options.setsToWin ?? state.settings.setsToWin) || 0),
     status:'planned',
     legsA:0,
     legsB:0,
+    setsA:0,
+    setsB:0,
     winnerId:null,
     stats:null,
     createdAt:new Date().toISOString()
@@ -2319,6 +2466,7 @@ function createSingleLive(config = {}) {
   const playerB = uid('single_b');
   const startScore = Math.max(2, Number(config.startScore) || 501);
   const legsToWin = Math.max(1, Number(config.legsToWin) || 3);
+  const setsToWin = Math.max(0, Number(config.setsToWin) || 0);
   const starter = config.starter === 'B' ? playerB : playerA;
   return {
     mode: 'single',
@@ -2335,6 +2483,7 @@ function createSingleLive(config = {}) {
     currentPlayerId: starter,
     startScore,
     legsToWin,
+    setsToWin,
     doubleOut: config.doubleOut !== false,
     remaining: {
       [playerA]: startScore,
@@ -2344,6 +2493,15 @@ function createSingleLive(config = {}) {
       [playerA]: 0,
       [playerB]: 0
     },
+    sets: {
+      [playerA]: 0,
+      [playerB]: 0
+    },
+    totalLegs: {
+      [playerA]: 0,
+      [playerB]: 0
+    },
+    setNumber: 1,
     legNumber: 1,
     visits: [],
     legRecords: [],
@@ -2363,8 +2521,10 @@ function createSingleMatch(event) {
   if (!playerAName || !playerBName) return toast('Wpisz nazwy obu graczy');
   const startScore = Number(data.get('startScore'));
   const legsToWin = Number(data.get('legsToWin'));
+  const setsToWin = Number(data.get('setsToWin'));
   if (!Number.isInteger(startScore) || startScore < 2 || startScore > 5000) return toast('Podaj prawidłową liczbę punktów startowych');
   if (!Number.isInteger(legsToWin) || legsToWin < 1 || legsToWin > 25) return toast('Podaj prawidłową liczbę wygranych legów');
+  if (!Number.isInteger(setsToWin) || setsToWin < 0 || setsToWin > 15) return toast('Podaj prawidłową liczbę wygranych setów');
   if (hub.singleLive && !confirm('Pojedynczy mecz jest już rozpoczęty. Usunąć go i rozpocząć nowy?')) return;
   hub.singleLive = createSingleLive({
     title: String(data.get('title') || '').trim(),
@@ -2372,6 +2532,7 @@ function createSingleMatch(event) {
     playerBName,
     startScore,
     legsToWin,
+    setsToWin,
     doubleOut: String(data.get('doubleOut')) !== 'false',
     starter: String(data.get('starter') || 'A')
   });
@@ -2406,6 +2567,7 @@ function startSingleRematch(id) {
     playerBName: item.playerBName,
     startScore: item.startScore,
     legsToWin: item.legsToWin,
+    setsToWin: item.setsToWin || 0,
     doubleOut: item.doubleOut !== false,
     starter: 'B'
   });
@@ -2438,12 +2600,16 @@ function startMatch(id) {
 function createLive(match) {
   const startScore = matchStartScore(match);
   const legsToWin = matchLegsToWin(match);
+  const setsToWin = matchSetsToWin(match);
   return {
     matchId:match.id,playerA:match.playerA,playerB:match.playerB,
     initialStarterId:match.playerA,legStarterId:match.playerA,currentPlayerId:match.playerA,
-    startScore,legsToWin,doubleOut:state.settings.doubleOut!==false,
+    startScore,legsToWin,setsToWin,doubleOut:state.settings.doubleOut!==false,
     remaining:{[match.playerA]:startScore,[match.playerB]:startScore},
-    legs:{[match.playerA]:0,[match.playerB]:0},legNumber:1,visits:[],legRecords:[],undo:[],
+    legs:{[match.playerA]:0,[match.playerB]:0},
+    sets:{[match.playerA]:0,[match.playerB]:0},
+    totalLegs:{[match.playerA]:0,[match.playerB]:0},
+    setNumber:1,legNumber:1,visits:[],legRecords:[],undo:[],
     pendingDarts:[],pendingSegment:null,pendingMultiplier:'S',startedAt:new Date().toISOString(),updatedAt:new Date().toISOString()
   };
 }
@@ -2451,16 +2617,36 @@ function createLive(match) {
 function manualResult(id) {
   if (!ensureCompetitionOpen()) return;
   const match=state.matches.find(m=>m.id===id); if(!match) return;
-  const target=matchLegsToWin(match);
-  const a=prompt(`Liczba legów: ${playerName(match.playerA)} (mecz do ${target})`, String(match.legsA||0)); if(a===null)return;
-  const b=prompt(`Liczba legów: ${playerName(match.playerB)} (mecz do ${target})`, String(match.legsB||0)); if(b===null)return;
-  const la=Number(a),lb=Number(b);
-  if(!Number.isInteger(la)||!Number.isInteger(lb)||la<0||lb<0) return toast('Podaj prawidłowe liczby legów');
-  if(match.bracketRound){
-    if(la===lb) return toast('W fazie pucharowej nie może być remisu');
-    if(Math.max(la,lb)!==target || Math.min(la,lb)>=target) return toast(`Zwycięzca tego etapu musi zdobyć dokładnie ${target} legów`);
+  const legTarget=matchLegsToWin(match);
+  const setTarget=matchSetsToWin(match);
+  let la=0,lb=0,sa=0,sb=0,winnerId=null;
+
+  if(setTarget>0){
+    const aSets=prompt(`Liczba setów: ${playerName(match.playerA)} (mecz do ${setTarget})`, String(match.setsA||0)); if(aSets===null)return;
+    const bSets=prompt(`Liczba setów: ${playerName(match.playerB)} (mecz do ${setTarget})`, String(match.setsB||0)); if(bSets===null)return;
+    sa=Number(aSets);sb=Number(bSets);
+    if(!Number.isInteger(sa)||!Number.isInteger(sb)||sa<0||sb<0) return toast('Podaj prawidłowe liczby setów');
+    if(sa===sb) return toast('Mecz rozgrywany do wygranych setów nie może zakończyć się remisem');
+    if(Math.max(sa,sb)!==setTarget || Math.min(sa,sb)>=setTarget) return toast(`Zwycięzca musi zdobyć dokładnie ${setTarget} setów`);
+
+    const aLegs=prompt(`Łączna liczba wygranych legów: ${playerName(match.playerA)}`, String(match.legsA||0)); if(aLegs===null)return;
+    const bLegs=prompt(`Łączna liczba wygranych legów: ${playerName(match.playerB)}`, String(match.legsB||0)); if(bLegs===null)return;
+    la=Number(aLegs);lb=Number(bLegs);
+    if(!Number.isInteger(la)||!Number.isInteger(lb)||la<0||lb<0) return toast('Podaj prawidłowe liczby legów');
+    winnerId=sa>sb?match.playerA:match.playerB;
+  }else{
+    const a=prompt(`Liczba legów: ${playerName(match.playerA)} (mecz do ${legTarget})`, String(match.legsA||0)); if(a===null)return;
+    const b=prompt(`Liczba legów: ${playerName(match.playerB)} (mecz do ${legTarget})`, String(match.legsB||0)); if(b===null)return;
+    la=Number(a);lb=Number(b);
+    if(!Number.isInteger(la)||!Number.isInteger(lb)||la<0||lb<0) return toast('Podaj prawidłowe liczby legów');
+    if(match.bracketRound){
+      if(la===lb) return toast('W fazie pucharowej nie może być remisu');
+      if(Math.max(la,lb)!==legTarget || Math.min(la,lb)>=legTarget) return toast(`Zwycięzca tego etapu musi zdobyć dokładnie ${legTarget} legów`);
+    }
+    winnerId=la===lb?null:(la>lb?match.playerA:match.playerB);
   }
-  match.legsA=la;match.legsB=lb;match.status='completed';match.winnerId=la===lb?null:(la>lb?match.playerA:match.playerB);match.stats=null;match.completedAt=new Date().toISOString();match.liveData=null;
+
+  match.legsA=la;match.legsB=lb;match.setsA=sa;match.setsB=sb;match.status='completed';match.winnerId=winnerId;match.stats=null;match.completedAt=new Date().toISOString();match.liveData=null;
   if(state.live?.matchId===id) state.live=null;
   const progress=progressCompetition();
   saveState();render();
@@ -2483,7 +2669,7 @@ function reopenMatch(id) {
     state.matches=state.matches.filter(m=>!m.bracketRound || (m.bracketRound||0)<=(match.bracketRound||0));
     state.knockout={...(state.knockout||{}),status:'active',championId:null,completedAt:null};
   }
-  match.status='planned';match.legsA=0;match.legsB=0;match.winnerId=null;match.stats=null;match.liveData=null;delete match.completedAt;
+  match.status='planned';match.legsA=0;match.legsB=0;match.setsA=0;match.setsB=0;match.winnerId=null;match.stats=null;match.liveData=null;delete match.completedAt;
   saveState();render();
 }
 
@@ -2633,11 +2819,9 @@ function checkoutSuggestion(score, maxDarts=3, doubleOut=true) {
 }
 
 function renderCheckoutHint(live, evaluation) {
-  if(evaluation.bust){
-    return `<div class="checkout-hint bust-hint" aria-live="polite"><span>BUST</span><strong>Wizyta nie zostanie odjęta</strong><small>Po zatwierdzeniu pozostanie ${evaluation.remainingBefore} punktów.</small></div>`;
-  }
+  if(evaluation.bust)return '';
   if(evaluation.checkout){
-    return `<div class="checkout-hint checkout-ready" aria-live="polite"><span>CHECKOUT</span><strong>${(live.pendingDarts||[]).map(d=>esc(d.label)).join(' · ')}</strong><small>Zamknięcie w ${(live.pendingDarts||[]).length} ${lotkaWord((live.pendingDarts||[]).length)}.</small></div>`;
+    return `<div class="checkout-hint checkout-ready" aria-live="polite"><span>Checkout</span><strong>${(live.pendingDarts||[]).map(d=>esc(d.label)).join(' · ')}</strong><small>Zamknięcie w ${(live.pendingDarts||[]).length} ${lotkaWord((live.pendingDarts||[]).length)}.</small></div>`;
   }
   const dartsLeft=3-(live.pendingDarts||[]).length;
   const suggestion=checkoutSuggestion(evaluation.remainingAfter,dartsLeft,scorerDoubleOut(live));
@@ -2840,6 +3024,25 @@ function clearPendingDarts() {
   render();
 }
 
+function checkoutWouldFinishMatch(live, playerId) {
+  if (!live) return false;
+  const nextLegs = (live.legs?.[playerId] || 0) + 1;
+  if (!liveUsesSets(live)) return nextLegs >= Math.max(1, Number(live.legsToWin) || 1);
+  const winsSet = nextLegs >= Math.max(1, Number(live.legsToWin) || 1);
+  if (!winsSet) return false;
+  const nextSets = (live.sets?.[playerId] || 0) + 1;
+  return nextSets >= Math.max(1, Number(live.setsToWin) || 1);
+}
+
+function advanceLiveToNextLeg(live) {
+  live.legNumber = Math.max(1, Number(live.legNumber) || 1) + 1;
+  live.remaining[live.playerA] = Number(live.startScore || 501);
+  live.remaining[live.playerB] = Number(live.startScore || 501);
+  const other = live.initialStarterId === live.playerA ? live.playerB : live.playerA;
+  live.legStarterId = live.legNumber % 2 === 1 ? live.initialStarterId : other;
+  live.currentPlayerId = live.legStarterId;
+}
+
 function submitScore(event) {
   event.preventDefault();
   const live=scorerLive();if(!live)return;
@@ -2850,7 +3053,7 @@ function submitScore(event) {
   const evaluation=evaluatePendingVisit(live);
   if(!evaluation.bust&&!evaluation.checkout&&live.pendingDarts.length<3)return toast('Dodaj trzecią lotkę albo wybierz Pudło');
   const pid=live.currentPlayerId;
-  if(!dartbotTraining && evaluation.checkout && live.legs[pid]+1>=Number(live.legsToWin || 2) && !confirm(`Checkout ${evaluation.remainingBefore}. Zakończyć mecz zwycięstwem ${scorerPlayerName(pid)}?`)) return;
+  if(!dartbotTraining && evaluation.checkout && checkoutWouldFinishMatch(live,pid) && !confirm(`Checkout ${evaluation.remainingBefore}. Zakończyć mecz zwycięstwem ${scorerPlayerName(pid)}?`)) return;
   live.undo.push(snapshotLive());
   if(live.undo.length>50)live.undo.shift();
   const throws=clone(live.pendingDarts);
@@ -2865,6 +3068,7 @@ function submitScore(event) {
     remainingAfter:evaluation.remainingAfter,
     throws,
     notation:throws.map(d=>d.label).join(' · '),
+    set:Math.max(1,Number(live.setNumber)||1),
     leg:live.legNumber,
     at:new Date().toISOString()
   };
@@ -2876,19 +3080,37 @@ function submitScore(event) {
   if(!evaluation.bust)live.remaining[pid]=evaluation.remainingAfter;
   if(evaluation.checkout){
     const winnerDarts=live.visits.filter(v=>v.leg===live.legNumber&&v.playerId===pid).reduce((sum,v)=>sum+v.darts,0);
-    live.legRecords.push({leg:live.legNumber,winnerId:pid,darts:winnerDarts,checkout:evaluation.remainingBefore});
-    live.legs[pid]++;
+    live.legRecords.push({set:Math.max(1,Number(live.setNumber)||1),leg:live.legNumber,winnerId:pid,darts:winnerDarts,checkout:evaluation.remainingBefore});
+    live.totalLegs=live.totalLegs||{[live.playerA]:0,[live.playerB]:0};
+    live.totalLegs[pid]=(live.totalLegs[pid]||0)+1;
+    live.legs[pid]=(live.legs[pid]||0)+1;
+
     if(dartbotTraining)return advanceDartbotTrainingLeg(pid);
-    if(live.legs[pid]>=Number(live.legsToWin || 2)){
-      finalizeLiveMatch(pid);return;
+
+    if(liveUsesSets(live)){
+      const setWon=live.legs[pid]>=Math.max(1,Number(live.legsToWin)||1);
+      if(setWon){
+        live.sets=live.sets||{[live.playerA]:0,[live.playerB]:0};
+        live.sets[pid]=(live.sets[pid]||0)+1;
+        if(live.sets[pid]>=Math.max(1,Number(live.setsToWin)||1)){
+          finalizeLiveMatch(pid);return;
+        }
+        live.legs[live.playerA]=0;
+        live.legs[live.playerB]=0;
+        live.setNumber=Math.max(1,Number(live.setNumber)||1)+1;
+        advanceLiveToNextLeg(live);
+        toast(`Set dla ${scorerPlayerName(pid)}`);
+      }else{
+        advanceLiveToNextLeg(live);
+        toast(`Leg dla ${scorerPlayerName(pid)}`);
+      }
+    }else{
+      if(live.legs[pid]>=Number(live.legsToWin || 2)){
+        finalizeLiveMatch(pid);return;
+      }
+      advanceLiveToNextLeg(live);
+      toast(`Leg dla ${scorerPlayerName(pid)}`);
     }
-    live.legNumber++;
-    live.remaining[live.playerA]=Number(live.startScore || 501);
-    live.remaining[live.playerB]=Number(live.startScore || 501);
-    const other=live.initialStarterId===live.playerA?live.playerB:live.playerA;
-    live.legStarterId=live.legNumber%2===1?live.initialStarterId:other;
-    live.currentPlayerId=live.legStarterId;
-    toast(`Leg dla ${scorerPlayerName(pid)}`);
   }else if(dartbotTraining){
     live.currentPlayerId=live.playerB;
     saveHub();render();maybeQueueDartbotTurn();return;
@@ -2897,10 +3119,16 @@ function submitScore(event) {
   }
   saveScorerState();render();
 }
+
 function finalizeLiveMatch(winnerId) {
   const live=scorerLive();
   if(!live)return;
   if(isDartbotScorer())return finishDartbotTraining(hub.trainingLive);
+
+  const totalLegsA=live.totalLegs?.[live.playerA] ?? live.legs?.[live.playerA] ?? 0;
+  const totalLegsB=live.totalLegs?.[live.playerB] ?? live.legs?.[live.playerB] ?? 0;
+  const setsA=live.sets?.[live.playerA] || 0;
+  const setsB=live.sets?.[live.playerB] || 0;
 
   if(isSingleScorer()){
     const statsA=summarizeLivePlayer(live.playerA,live);
@@ -2913,10 +3141,13 @@ function finalizeLiveMatch(winnerId) {
       playerBName:live.playerNames?.[live.playerB] || 'Gracz 2',
       startScore:live.startScore,
       legsToWin:live.legsToWin,
+      setsToWin:live.setsToWin || 0,
       doubleOut:live.doubleOut!==false,
       initialStarterName:live.playerNames?.[live.initialStarterId] || '',
-      legsA:live.legs[live.playerA],
-      legsB:live.legs[live.playerB],
+      legsA:totalLegsA,
+      legsB:totalLegsB,
+      setsA,
+      setsB,
       winnerName:live.playerNames?.[winnerId] || '',
       statsA,
       statsB,
@@ -2939,7 +3170,7 @@ function finalizeLiveMatch(winnerId) {
 
   const match=state.matches.find(m=>m.id===live.matchId);
   if(!match)return;
-  match.legsA=live.legs[live.playerA];match.legsB=live.legs[live.playerB];match.winnerId=winnerId;match.status='completed';match.completedAt=new Date().toISOString();
+  match.legsA=totalLegsA;match.legsB=totalLegsB;match.setsA=setsA;match.setsB=setsB;match.winnerId=winnerId;match.status='completed';match.completedAt=new Date().toISOString();
   match.stats={
     [live.playerA]:summarizeLivePlayer(live.playerA,live),
     [live.playerB]:summarizeLivePlayer(live.playerB,live)
@@ -2993,7 +3224,7 @@ function computeStandings(group='all') {
   state.matches.filter(m=>m.status==='completed'&&!m.bye&&(state.settings.format==='knockout'||!m.bracketRound)&&(group==='all'||m.group===group)).forEach(m=>{
     const a=rows.get(m.playerA),b=rows.get(m.playerB);if(!a||!b)return;
     a.played++;b.played++;a.legsFor+=m.legsA;a.legsAgainst+=m.legsB;b.legsFor+=m.legsB;b.legsAgainst+=m.legsA;
-    if(m.legsA>m.legsB){a.wins++;b.losses++;a.points+=Number(state.settings.pointsWin);b.points+=Number(state.settings.pointsLoss||0);}else if(m.legsB>m.legsA){b.wins++;a.losses++;b.points+=Number(state.settings.pointsWin);a.points+=Number(state.settings.pointsLoss||0);}else{a.draws++;b.draws++;a.points+=Number(state.settings.pointsDraw);b.points+=Number(state.settings.pointsDraw);}
+    if(m.winnerId===m.playerA){a.wins++;b.losses++;a.points+=Number(state.settings.pointsWin);b.points+=Number(state.settings.pointsLoss||0);}else if(m.winnerId===m.playerB){b.wins++;a.losses++;b.points+=Number(state.settings.pointsWin);a.points+=Number(state.settings.pointsLoss||0);}else{a.draws++;b.draws++;a.points+=Number(state.settings.pointsDraw);b.points+=Number(state.settings.pointsDraw);}
     [a,b].forEach((r,i)=>{const pid=i?m.playerB:m.playerA;const s=m.stats?.[pid];if(s){r.totalScore+=Number(s.totalScore||0);r.totalDarts+=Number(s.totalDarts||0);}});
   });
   rows.forEach(r=>{r.diff=r.legsFor-r.legsAgainst;r.average=r.totalDarts?r.totalScore/r.totalDarts*3:0;});
@@ -3437,7 +3668,7 @@ async function installApp() {
 
 window.addEventListener('beforeinstallprompt',event=>{event.preventDefault();deferredInstallPrompt=event;updateInstallButton();});
 window.addEventListener('appinstalled',()=>{deferredInstallPrompt=null;toast('Aplikacja została zainstalowana');});
-if('serviceWorker' in navigator){window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js?v=1.6.0').catch(console.error));}
+if('serviceWorker' in navigator){window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js?v=1.6.1').catch(console.error));}
 
 if (progressCompetition()) saveState();
 render();

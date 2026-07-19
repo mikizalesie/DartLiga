@@ -598,3 +598,27 @@ body.tablet-mode #app{min-height:100vh}
   .tablet-queue-match{padding:22px}
   .tablet-queue-points{position:static;width:max-content;margin-top:8px}
 }
+
+
+/* Firebase realtime sync v1.9.0 */
+.firebase-sync-status{display:flex;align-items:center;gap:8px;padding:8px 10px;margin:8px 4px 12px;border:1px solid var(--line);border-radius:11px;background:#0b1220;color:var(--muted);font-size:11px;min-width:0}
+.firebase-sync-status span{width:9px;height:9px;flex:0 0 9px;border-radius:50%;background:#64748b;box-shadow:0 0 0 3px rgba(100,116,139,.12)}
+.firebase-sync-status b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.firebase-sync-status.online{color:#86efac;border-color:rgba(34,197,94,.35);background:rgba(34,197,94,.08)}
+.firebase-sync-status.online span{background:var(--primary);box-shadow:0 0 0 3px rgba(34,197,94,.15),0 0 14px rgba(34,197,94,.5)}
+.firebase-sync-status.syncing{color:#bae6fd;border-color:rgba(56,189,248,.35);background:rgba(56,189,248,.08)}
+.firebase-sync-status.syncing span{background:var(--info);animation:firebasePulse 1s infinite}
+.firebase-sync-status.offline{color:#fde68a;border-color:rgba(245,158,11,.35);background:rgba(245,158,11,.08)}
+.firebase-sync-status.offline span{background:var(--warning)}
+.firebase-sync-status.error{color:#fecaca;border-color:rgba(239,68,68,.4);background:rgba(239,68,68,.09)}
+.firebase-sync-status.error span{background:var(--danger)}
+.firebase-sync-status.compact{margin:0;padding:7px;width:27px;height:27px;border-radius:999px;justify-content:center}
+.firebase-sync-status.compact span{width:9px;height:9px;flex-basis:9px}
+.firebase-settings-card .firebase-sync-status{margin:0;max-width:220px}
+.firebase-project-info{display:grid;gap:4px;padding:14px;margin:12px 0 16px;border:1px solid var(--line);border-radius:12px;background:#0b1220}
+.firebase-project-info span{font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);font-weight:900}
+.firebase-project-info strong{font-size:18px}
+.firebase-project-info small{color:var(--muted)}
+.firebase-note{border-left-color:var(--primary);background:rgba(34,197,94,.07)}
+@keyframes firebasePulse{0%,100%{opacity:.45;transform:scale(.85)}50%{opacity:1;transform:scale(1.1)}}
+@media(max-width:760px){.firebase-sync-status{margin:6px 0}.firebase-settings-card .section-head{align-items:flex-start;flex-direction:column}.firebase-settings-card .firebase-sync-status{max-width:none;width:100%}}

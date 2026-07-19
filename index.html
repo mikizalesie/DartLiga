@@ -8,16 +8,376 @@
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="description" content="DartLiga PWA – tryb organizatora i użytkownika, licznik X01, wiele tarcz, ligi, turnieje, treningi i wyniki na żywo.">
+  <meta name="description" content="DartLiga PWA – wyniki na żywo i stanowiska tabletowe synchronizowane przez Firebase.">
   <title>DartLiga PWA</title>
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icons/icon-192.png">
   <link rel="apple-touch-icon" href="icons/icon-192.png">
-  <link rel="stylesheet" href="styles.css?v=1.8.0">
+  <link rel="stylesheet" href="styles.css?v=1.9.0">
 </head>
 <body>
   <div id="app"></div>
   <div id="toast" class="toast" aria-live="polite"></div>
-  <script src="app.js?v=1.8.0"></script>
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-app.js";
+    import { getAuth, onAuthStateChanged, signInAnonymously } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-auth.js";
+    import {
+      getFirestore,
+      collection,
+      doc,
+      getDoc,
+      getDocs,
+      onSnapshot,
+      setDoc,
+      deleteDoc,
+      writeBatch,
+      serverTimestamp
+    } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js";
+    
+    const firebaseConfig = {
+      apiKey: "AIzaSyBbM98iv5p5zYinxXJUK2KlIxCxCbc3yk0",
+      authDomain: "dartliga-test.firebaseapp.com",
+      projectId: "dartliga-test",
+      storageBucket: "dartliga-test.firebasestorage.app",
+      messagingSenderId: "583906544113",
+      appId: "1:583906544113:web:16471200964c0c521edc50"
+    };
+    
+    const STORAGE_KEY = 'dartliga_pwa_hub_v2';
+    const HUB_DOCUMENT_ID = '_hub';
+    const CLIENT_ID_KEY = 'dartliga_firebase_client_id';
+    const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+    const db = getFirestore(app);
+    const clientId = localStorage.getItem(CLIENT_ID_KEY) || `client_${crypto.randomUUID?.() || Math.random().toString(36).slice(2)}`;
+    localStorage.setItem(CLIENT_ID_KEY, clientId);
+    
+    let authenticated = false;
+    let bootstrapped = false;
+    let remoteHubMeta = null;
+    const remoteCompetitions = new Map();
+    const remoteMatches = new Map();
+    const matchSubscriptions = new Map();
+    const matchSubscriptionsReady = new Set();
+    let competitionsUnsubscribe = null;
+    let emitTimer = null;
+    let lastEmittedJson = '';
+    const writeTimers = new Map();
+    
+    function dispatchStatus(state, message) {
+      window.dispatchEvent(new CustomEvent('dartliga-firebase-status', {detail:{state,message}}));
+    }
+    
+    function clean(value) {
+      if (value === undefined) return null;
+      return JSON.parse(JSON.stringify(value));
+    }
+    
+    function stripMeta(value) {
+      if (!value || typeof value !== 'object') return value;
+      const copy = clean(value);
+      delete copy._firebaseUpdatedAt;
+      delete copy._updatedBy;
+      delete copy._clientUpdatedAt;
+      delete copy.kind;
+      return copy;
+    }
+    
+    function localHub() {
+      try {
+        const raw = localStorage.getItem(STORAGE_KEY);
+        return raw ? JSON.parse(raw) : null;
+      } catch (error) {
+        console.error('Firebase localHub', error);
+        return null;
+      }
+    }
+    
+    function hubPayload(hub) {
+      const source = clean(hub || {});
+      return {
+        kind:'hub',
+        version:source.version || '1.9.0',
+        activeCompetitionId:source.activeCompetitionId || null,
+        singleMatches:Array.isArray(source.singleMatches) ? source.singleMatches : [],
+        singleLive:source.singleLive || null,
+        trainingSessions:Array.isArray(source.trainingSessions) ? source.trainingSessions : [],
+        trainingLive:source.trainingLive || null,
+        trainingProfileName:String(source.trainingProfileName || ''),
+        createdAt:source.createdAt || new Date().toISOString(),
+        updatedAt:source.updatedAt || new Date().toISOString(),
+        _clientUpdatedAt:new Date().toISOString(),
+        _updatedBy:clientId,
+        _firebaseUpdatedAt:serverTimestamp()
+      };
+    }
+    
+    function competitionPayload(competition) {
+      const payload = clean(competition || {});
+      payload.activeLiveMatchId = payload.live?.matchId || null;
+      delete payload.matches;
+      delete payload.live;
+      payload.kind = 'competition';
+      payload._clientUpdatedAt = new Date().toISOString();
+      payload._updatedBy = clientId;
+      payload._firebaseUpdatedAt = serverTimestamp();
+      return payload;
+    }
+    
+    function matchPayload(match) {
+      const payload = clean(match || {});
+      payload.kind = 'match';
+      payload._clientUpdatedAt = new Date().toISOString();
+      payload._updatedBy = clientId;
+      payload._firebaseUpdatedAt = serverTimestamp();
+      return payload;
+    }
+    
+    function queueWrite(key, operation, delay = 160) {
+      clearTimeout(writeTimers.get(key));
+      dispatchStatus(navigator.onLine ? 'syncing' : 'offline', navigator.onLine ? 'Zapisywanie zmian w Firebase…' : 'Brak internetu — zapisano lokalnie');
+      writeTimers.set(key, setTimeout(async () => {
+        try {
+          await operation();
+          dispatchStatus('online', 'Dane są zsynchronizowane z Firebase');
+        } catch (error) {
+          console.error('Firebase write', key, error);
+          dispatchStatus(navigator.onLine ? 'error' : 'offline', error?.message || 'Nie udało się zapisać danych');
+        } finally {
+          writeTimers.delete(key);
+        }
+      }, delay));
+    }
+    
+    async function writeGlobal(hub) {
+      await setDoc(doc(db,'competitions',HUB_DOCUMENT_ID),hubPayload(hub),{merge:true});
+    }
+    
+    async function writeMatch(competitionId, match) {
+      if (!competitionId || !match?.id) return;
+      await setDoc(doc(db,'competitions',competitionId,'matches',match.id),matchPayload(match));
+    }
+    
+    async function deleteMissingMatches(competitionId, localMatches) {
+      const snapshot = await getDocs(collection(db,'competitions',competitionId,'matches'));
+      const wanted = new Set((localMatches || []).map(match => match.id));
+      const missing = snapshot.docs.filter(item => !wanted.has(item.id));
+      for (let offset=0; offset<missing.length; offset+=450) {
+        const batch = writeBatch(db);
+        missing.slice(offset,offset+450).forEach(item => batch.delete(item.ref));
+        await batch.commit();
+      }
+    }
+    
+    async function writeCompetition(competition) {
+      if (!competition?.id) return;
+      await setDoc(doc(db,'competitions',competition.id),competitionPayload(competition));
+      const matches = Array.isArray(competition.matches) ? competition.matches : [];
+      for (let offset=0; offset<matches.length; offset+=400) {
+        const batch = writeBatch(db);
+        matches.slice(offset,offset+400).forEach(match => {
+          if (match?.id) batch.set(doc(db,'competitions',competition.id,'matches',match.id),matchPayload(match));
+        });
+        await batch.commit();
+      }
+      await deleteMissingMatches(competition.id,matches);
+    }
+    
+    async function deleteMissingCompetitions(hub) {
+      const snapshot = await getDocs(collection(db,'competitions'));
+      const wanted = new Set((hub?.competitions || []).map(item => item.id));
+      for (const item of snapshot.docs) {
+        if (item.id === HUB_DOCUMENT_ID || wanted.has(item.id)) continue;
+        const matches = await getDocs(collection(db,'competitions',item.id,'matches'));
+        for (let offset=0; offset<matches.docs.length; offset+=450) {
+          const batch = writeBatch(db);
+          matches.docs.slice(offset,offset+450).forEach(match => batch.delete(match.ref));
+          await batch.commit();
+        }
+        await deleteDoc(item.ref);
+      }
+    }
+    
+    async function writeFull(hub) {
+      if (!hub) return;
+      dispatchStatus('syncing','Wysyłanie całego archiwum do Firebase…');
+      await writeGlobal(hub);
+      for (const competition of hub.competitions || []) await writeCompetition(competition);
+      await deleteMissingCompetitions(hub);
+      dispatchStatus('online','Całe archiwum jest zsynchronizowane');
+    }
+    
+    function assembleRemoteHub() {
+      if (!remoteHubMeta || !remoteCompetitions.size) return null;
+      if ([...remoteCompetitions.keys()].some(id => !matchSubscriptionsReady.has(id))) return null;
+      const competitions = [...remoteCompetitions.values()].map(raw => {
+        const competition = stripMeta(raw);
+        const activeLiveMatchId = competition.activeLiveMatchId || null;
+        delete competition.activeLiveMatchId;
+        const matches = [...(remoteMatches.get(competition.id)?.values() || [])].map(stripMeta);
+        competition.matches = matches;
+        const selectedLiveMatch = (activeLiveMatchId && matches.find(item => item.id === activeLiveMatchId && item.liveData))
+          || matches.find(item => item.status === 'live' && item.liveData)
+          || null;
+        competition.live = selectedLiveMatch?.liveData ? clean(selectedLiveMatch.liveData) : null;
+        return competition;
+      });
+      const meta = stripMeta(remoteHubMeta);
+      return {
+        ...meta,
+        version:meta.version || '1.9.0',
+        competitions,
+        activeCompetitionId:competitions.some(item => item.id === meta.activeCompetitionId)
+          ? meta.activeCompetitionId
+          : competitions[0]?.id,
+        appRole:localHub()?.appRole === 'user' ? 'user' : 'organizer'
+      };
+    }
+    
+    function scheduleEmit() {
+      clearTimeout(emitTimer);
+      emitTimer = setTimeout(() => {
+        const hub = assembleRemoteHub();
+        if (!hub) return;
+        const json = JSON.stringify(hub);
+        if (json === lastEmittedJson) return;
+        lastEmittedJson = json;
+        window.dispatchEvent(new CustomEvent('dartliga-firebase-hub',{detail:{hub}}));
+      },100);
+    }
+    
+    function subscribeMatches(competitionId) {
+      if (matchSubscriptions.has(competitionId)) return;
+      const unsubscribe = onSnapshot(collection(db,'competitions',competitionId,'matches'), snapshot => {
+        const map = new Map();
+        snapshot.docs.forEach(item => map.set(item.id,item.data()));
+        remoteMatches.set(competitionId,map);
+        matchSubscriptionsReady.add(competitionId);
+        scheduleEmit();
+      }, error => {
+        console.error('Firebase matches listener',competitionId,error);
+        dispatchStatus('error',error?.message || 'Błąd odczytu meczów');
+      });
+      matchSubscriptions.set(competitionId,unsubscribe);
+    }
+    
+    function startListeners() {
+      if (competitionsUnsubscribe) return;
+      competitionsUnsubscribe = onSnapshot(collection(db,'competitions'), snapshot => {
+        const seen = new Set();
+        snapshot.docs.forEach(item => {
+          if (item.id === HUB_DOCUMENT_ID) {
+            remoteHubMeta = item.data();
+            return;
+          }
+          seen.add(item.id);
+          remoteCompetitions.set(item.id,item.data());
+          subscribeMatches(item.id);
+        });
+        [...remoteCompetitions.keys()].forEach(id => {
+          if (seen.has(id)) return;
+          remoteCompetitions.delete(id);
+          remoteMatches.delete(id);
+          matchSubscriptionsReady.delete(id);
+          matchSubscriptions.get(id)?.();
+          matchSubscriptions.delete(id);
+        });
+        dispatchStatus('online','Połączono — nasłuchiwanie zmian w czasie rzeczywistym');
+        scheduleEmit();
+      }, error => {
+        console.error('Firebase competitions listener',error);
+        dispatchStatus(navigator.onLine?'error':'offline',error?.message || 'Błąd połączenia z Firebase');
+      });
+    }
+    
+    async function remoteExists() {
+      const hubDoc = await getDoc(doc(db,'competitions',HUB_DOCUMENT_ID));
+      if (hubDoc.exists()) return true;
+      const snapshot = await getDocs(collection(db,'competitions'));
+      return snapshot.docs.some(item => item.id !== HUB_DOCUMENT_ID);
+    }
+    
+    async function bootstrap(local = null) {
+      if (!authenticated || bootstrapped) return;
+      bootstrapped = true;
+      try {
+        dispatchStatus('syncing','Sprawdzanie danych w Firebase…');
+        const exists = await remoteExists();
+        if (!exists) {
+          const source = local || localHub();
+          if (source) await writeFull(source);
+        }
+        startListeners();
+      } catch (error) {
+        console.error('Firebase bootstrap',error);
+        bootstrapped = false;
+        dispatchStatus(navigator.onLine?'error':'offline',error?.message || 'Nie udało się uruchomić synchronizacji');
+      }
+    }
+    
+    async function pullNow() {
+      dispatchStatus('syncing','Pobieranie aktualnych danych…');
+      const snapshot = await getDocs(collection(db,'competitions'));
+      const competitionIds = [];
+      snapshot.docs.forEach(item => {
+        if (item.id === HUB_DOCUMENT_ID) remoteHubMeta = item.data();
+        else {
+          competitionIds.push(item.id);
+          remoteCompetitions.set(item.id,item.data());
+        }
+      });
+      for (const id of competitionIds) {
+        const matches = await getDocs(collection(db,'competitions',id,'matches'));
+        remoteMatches.set(id,new Map(matches.docs.map(item => [item.id,item.data()])));
+        matchSubscriptionsReady.add(id);
+      }
+      const hub = assembleRemoteHub();
+      if (hub) window.dispatchEvent(new CustomEvent('dartliga-firebase-hub',{detail:{hub}}));
+      dispatchStatus('online','Pobrano najnowsze dane z Firebase');
+    }
+    
+    window.DartLigaFirebase = {
+      bootstrap,
+      syncGlobal(hub) {
+        if (!authenticated) return;
+        queueWrite('global',()=>writeGlobal(hub));
+      },
+      syncCompetition(competition) {
+        if (!authenticated || !competition?.id) return;
+        queueWrite(`competition:${competition.id}`,()=>writeCompetition(competition),220);
+      },
+      syncMatch(competitionId,match) {
+        if (!authenticated || !competitionId || !match?.id) return;
+        queueWrite(`match:${competitionId}:${match.id}`,()=>writeMatch(competitionId,match),100);
+      },
+      syncFull(hub) {
+        if (!authenticated) return;
+        queueWrite('full',()=>writeFull(hub),50);
+      },
+      pullNow,
+      status() { return {authenticated,bootstrapped,clientId}; }
+    };
+    
+    window.addEventListener('online',()=>dispatchStatus(authenticated?'online':'connecting',authenticated?'Połączenie internetowe przywrócone':'Ponowne łączenie…'));
+    window.addEventListener('offline',()=>dispatchStatus('offline','Brak internetu — aplikacja korzysta z kopii lokalnej'));
+    
+    onAuthStateChanged(auth, async user => {
+      if (user) {
+        authenticated = true;
+        dispatchStatus('online',`Połączono anonimowo: ${user.uid.slice(0,8)}…`);
+        window.dispatchEvent(new CustomEvent('dartliga-firebase-ready'));
+        await bootstrap(localHub());
+        return;
+      }
+      try {
+        dispatchStatus('connecting','Logowanie anonimowe do Firebase…');
+        await signInAnonymously(auth);
+      } catch (error) {
+        console.error('Firebase anonymous auth',error);
+        dispatchStatus('error',error?.message || 'Nie udało się zalogować anonimowo');
+      }
+    });
+  </script>
+  <script src="app.js?v=1.9.0"></script>
 </body>
 </html>

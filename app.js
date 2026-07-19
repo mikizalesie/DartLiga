@@ -2,7 +2,7 @@
 
 const LEGACY_STORAGE_KEY = 'dartliga_pwa_state_v1';
 const STORAGE_KEY = 'dartliga_pwa_hub_v2';
-const APP_VERSION = '1.8.0';
+const APP_VERSION = '1.9.0';
 let route = 'home';
 let matchFilter = 'all';
 let tableGroup = 'all';
@@ -17,6 +17,8 @@ let tabletBoardNumber = 1;
 let tabletMode = null;
 let tabletCompetitionId = null;
 let tabletRefreshTimer = null;
+let firebaseRemoteApplying = false;
+let firebaseSyncStatus = {state:'connecting', message:'Łączenie z Firebase…'};
 const TABLET_ROUTE_BY_MODE = {score:'tabletScore', entry:'tabletEntry', queue:'tabletQueue'};
 const TABLET_MODE_BY_ROUTE = {tabletScore:'score', tabletEntry:'entry', tabletQueue:'queue'};
 
@@ -733,6 +735,112 @@ function occupiedBoardsCount(competition = state) {
 }
 
 
+
+function firebaseBridge() {
+  return window.DartLigaFirebase || null;
+}
+
+function firebaseStatusLabel(status = firebaseSyncStatus) {
+  const stateName = String(status?.state || 'connecting');
+  return ({
+    online: 'Firebase połączone',
+    syncing: 'Synchronizacja…',
+    connecting: 'Łączenie z Firebase…',
+    offline: 'Tryb offline',
+    error: 'Błąd Firebase'
+  })[stateName] || 'Firebase';
+}
+
+function firebaseStatusMarkup(compact = false) {
+  const stateName = String(firebaseSyncStatus?.state || 'connecting');
+  const label = firebaseStatusLabel();
+  const title = esc(firebaseSyncStatus?.message || label);
+  return `<div class="firebase-sync-status ${stateName} ${compact?'compact':''}" title="${title}"><span aria-hidden="true"></span>${compact?'':`<b>${esc(label)}</b>`}</div>`;
+}
+
+function updateFirebaseStatusUI() {
+  $$('.firebase-sync-status').forEach(element => {
+    const compact = element.classList.contains('compact');
+    const holder = document.createElement('div');
+    holder.innerHTML = firebaseStatusMarkup(compact);
+    element.replaceWith(holder.firstElementChild);
+  });
+}
+
+function firebaseSyncGlobal() {
+  if (firebaseRemoteApplying) return;
+  firebaseBridge()?.syncGlobal?.(clone(hub));
+}
+
+function firebaseSyncCompetition(competition = state) {
+  if (firebaseRemoteApplying || !competition) return;
+  firebaseBridge()?.syncCompetition?.(clone(competition));
+  firebaseSyncGlobal();
+}
+
+function firebaseSyncMatch(competition = state, match = null) {
+  if (firebaseRemoteApplying || !competition) return;
+  const target = match || competition.matches?.find(item => item.id === competition.live?.matchId);
+  if (!target) return firebaseSyncCompetition(competition);
+  firebaseBridge()?.syncMatch?.(competition.id, clone(target));
+  firebaseSyncGlobal();
+}
+
+function currentScorerHasPendingDarts() {
+  const live = scorerLive();
+  return Boolean(live?.pendingDarts?.length || live?.pendingSegment);
+}
+
+function applyFirebaseRemoteHub(remoteHub) {
+  if (!remoteHub || !Array.isArray(remoteHub.competitions) || !remoteHub.competitions.length) return;
+  if ((route === 'scorer' || route === 'tabletEntry') && currentScorerHasPendingDarts()) return;
+
+  const role = currentAppRole();
+  const currentCompetitionId = tabletCompetitionId || state?.id || hub.activeCompetitionId;
+  const currentMatchId = scorerLive()?.matchId || null;
+  const incoming = {...remoteHub, appRole:role, version:APP_VERSION};
+
+  firebaseRemoteApplying = true;
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(incoming));
+    hub = loadHub();
+    hub.appRole = role;
+    state = hub.competitions.find(item => item.id === currentCompetitionId)
+      || hub.competitions.find(item => item.id === hub.activeCompetitionId)
+      || hub.competitions[0];
+    hub.activeCompetitionId = state.id;
+
+    if (isTabletRoute()) {
+      tabletCompetitionId = state.id;
+      tabletBoardNumber = validBoardNumber(tabletBoardNumber, state) || 1;
+      if (route === 'tabletEntry') prepareTabletEntryLive();
+    } else if (route === 'scorer' && currentMatchId) {
+      const match = state.matches.find(item => item.id === currentMatchId);
+      state.live = match?.liveData ? clone(match.liveData) : null;
+      if (!state.live) route = 'live';
+    }
+
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(hub));
+  } finally {
+    firebaseRemoteApplying = false;
+  }
+  render();
+}
+
+function forceFirebaseUpload() {
+  const bridge = firebaseBridge();
+  if (!bridge?.syncFull) return toast('Firebase nie jest jeszcze gotowe');
+  bridge.syncFull(clone(hub), {force:true});
+  toast('Wysyłanie danych do Firebase');
+}
+
+function forceFirebaseDownload() {
+  const bridge = firebaseBridge();
+  if (!bridge?.pullNow) return toast('Firebase nie jest jeszcze gotowe');
+  bridge.pullNow();
+  toast('Pobieranie danych z Firebase');
+}
+
 function tabletViewLabel(mode = currentTabletMode()) {
   return ({score:'Tylko wynik', entry:'Wpisywanie punktów', queue:'Mecze na tarczy'})[mode] || 'Widok tarczy';
 }
@@ -848,6 +956,7 @@ function tabletTopbar(mode = currentTabletMode()) {
   return `<header class="tablet-controlbar">
     <div><span>Tarcza ${tabletBoardNumber}</span><strong>${esc(tabletViewLabel(mode))}</strong><small>${esc(state.settings.competitionName)}</small></div>
     <div class="tablet-control-actions">
+      ${firebaseStatusMarkup(true)}
       <button class="btn small ghost" id="tabletRefresh">Odśwież</button>
       <button class="btn small ghost" id="tabletFullscreen">Pełny ekran</button>
       <button class="btn small danger" id="tabletExit">Wróć</button>
@@ -883,7 +992,7 @@ function renderBoardViews() {
         </article>`;
       }).join('')}
     </section>
-    <div class="note"><strong>Tryb testowy bez synchronizacji internetowej:</strong> widoki odświeżają się automatycznie między kartami tej samej przeglądarki. Osobne fizyczne tablety będą wymagały późniejszego podłączenia Firebase, aby wszystkie urządzenia widziały te same dane w czasie rzeczywistym.</div>`;
+    <div class="note firebase-note"><strong>Synchronizacja Firebase:</strong> niezależne telefony i tablety korzystają ze wspólnych danych. Wynik, stan tarcz oraz kolejka meczów aktualizują się automatycznie. Lokalna pamięć pozostaje kopią awaryjną na wypadek utraty internetu.</div>`;
 }
 
 function tabletPlayerScore(live, playerId) {
@@ -1004,26 +1113,32 @@ function saveTabletEntryState() {
   state = competition;
   tabletCompetitionId = competition.id;
   localStorage.setItem(STORAGE_KEY, JSON.stringify(hub));
+  if (!firebaseRemoteApplying) firebaseBridge()?.syncMatch?.(competition.id, clone(match));
+  firebaseSyncGlobal();
 }
 
 function saveScorerState() {
   if (route === 'tabletEntry') saveTabletEntryState();
-  else if (isSingleScorer() || isDartbotScorer()) saveHub();
-  else saveState();
+  else if (isSingleScorer() || isDartbotScorer()) saveHub({firebase:'global'});
+  else saveState({firebase:'match'});
 }
 function scorerDoubleOut(live = scorerLive()) {
   if (isDartbotScorer()) return true;
   if (live?.doubleOut !== undefined) return live.doubleOut !== false;
   return state.settings.doubleOut !== false;
 }
-function saveHub() {
+function saveHub(options = {}) {
   hub.version = APP_VERSION;
   hub.appRole = currentAppRole();
   hub.updatedAt = new Date().toISOString();
   localStorage.setItem(STORAGE_KEY, JSON.stringify(hub));
+  if (!firebaseRemoteApplying && options.firebase !== false) {
+    if (options.firebase === 'full') firebaseBridge()?.syncFull?.(clone(hub));
+    else firebaseSyncGlobal();
+  }
 }
 
-saveHub();
+saveHub({firebase:false});
 
 function syncActiveCompetitionLive() {
   if (!state?.live?.matchId) return;
@@ -1034,7 +1149,7 @@ function syncActiveCompetitionLive() {
   match.status = 'live';
 }
 
-function saveState() {
+function saveState(options = {}) {
   syncActiveCompetitionLive();
   state.version = APP_VERSION;
   state.updatedAt = new Date().toISOString();
@@ -1042,7 +1157,10 @@ function saveState() {
   if (index >= 0) hub.competitions[index] = state;
   else hub.competitions.push(state);
   hub.activeCompetitionId = state.id;
-  saveHub();
+  saveHub({firebase:false});
+  if (firebaseRemoteApplying || options.firebase === false) return;
+  if (options.firebase === 'match') firebaseSyncMatch(state);
+  else firebaseSyncCompetition(state);
 }
 
 function activateCompetition(id, targetRoute = 'dashboard') {
@@ -1225,7 +1343,8 @@ function render() {
       <aside class="sidebar">
         <button class="brand brand-button" data-route="home"><div class="logo"></div><div><strong>DartLiga</strong><small>${hub.competitions.length} zapisanych rozgrywek</small></div></button>
         ${roleSwitcher(false)}
-        <small class="role-test-label">Tryb testowy — bez logowania</small>
+        <small class="role-test-label">Tryb testowy — logowanie anonimowe Firebase</small>
+        ${firebaseStatusMarkup(false)}
         <nav class="nav">
           ${navigation.map(item=>navButton(...item)).join('')}
         </nav>
@@ -1989,12 +2108,13 @@ function singleHistoryRow(item) {
 
 function renderSettings() {
   return `
-    ${pageHeader('Dane aplikacji', 'Ustawienia i kopia zapasowa', 'Dane są zapisywane lokalnie w tej przeglądarce. Eksport JSON obejmuje ligi, turnieje oraz pojedyncze mecze.')}
+    ${pageHeader('Dane aplikacji', 'Ustawienia, Firebase i kopia zapasowa', 'Dane są zapisywane lokalnie oraz synchronizowane z projektem Firebase dartliga-test.')}
     <div class="grid two">
+      <section class="card firebase-settings-card"><div class="section-head"><div><h2>Synchronizacja Firebase</h2><p class="muted">Wyniki i terminarze są współdzielone między niezależnymi urządzeniami.</p></div>${firebaseStatusMarkup(false)}</div><div class="firebase-project-info"><span>Projekt</span><strong>dartliga-test</strong><small>${esc(firebaseSyncStatus?.message || firebaseStatusLabel())}</small></div><div class="row-actions"><button class="btn primary" id="firebasePush">Wyślij dane lokalne</button><button class="btn info" id="firebasePull">Pobierz dane z chmury</button></div><p class="field-help">Przyciski służą do testów i ręcznego wymuszenia synchronizacji. Podczas normalnej pracy zapis odbywa się automatycznie.</p></section>
       <section class="card"><h2>Kopia danych</h2><p class="muted">Eksport obejmuje wszystkie aktywne i zakończone rozgrywki, pojedyncze mecze, zawodników, terminarze, wyniki i statystyki.</p><div class="row-actions"><button class="btn primary" id="exportData">Eksportuj JSON</button><label class="btn info" for="importData">Importuj JSON</label><input id="importData" type="file" accept="application/json" hidden></div></section>
       <section class="card"><h2>Instalacja PWA</h2><p class="muted">Po uruchomieniu przez HTTPS lub lokalny serwer aplikacja może działać jak program i zachować podstawowe pliki offline.</p><button class="btn primary" id="installBtnPage" ${deferredInstallPrompt?'':'disabled'}>Zainstaluj aplikację</button></section>
     </div>
-    <section class="card danger-zone" style="margin-top:16px"><h2 class="red">Strefa niebezpieczna</h2><p class="muted">Usunięcie danych kasuje całe archiwum lig, turniejów i pojedynczych meczów. Operacja jest nieodwracalna, chyba że wcześniej wykonano eksport JSON.</p><button class="btn danger" id="resetAll">Usuń całe archiwum</button></section>`;
+    <section class="card danger-zone" style="margin-top:16px"><h2 class="red">Strefa niebezpieczna</h2><p class="muted">Usunięcie danych kasuje lokalne archiwum i po synchronizacji może zastąpić dane w projekcie testowym. Przed operacją wykonaj eksport JSON.</p><button class="btn danger" id="resetAll">Usuń całe archiwum</button></section>`;
 }
 
 
@@ -2409,6 +2529,8 @@ function bindCurrentPage() {
   $('#clearDarts')?.addEventListener('click', clearPendingDarts);
   $('#undoVisit')?.addEventListener('click', undoVisit);
   $('#toggleStarter')?.addEventListener('click', toggleLegStarter);
+  $('#firebasePush')?.addEventListener('click', forceFirebaseUpload);
+  $('#firebasePull')?.addEventListener('click', forceFirebaseDownload);
   $('#exportData')?.addEventListener('click', exportData);
   $('#importData')?.addEventListener('change', importData);
   $('#resetAll')?.addEventListener('click', resetAll);
@@ -4202,7 +4324,9 @@ function importData(event) {
     hub=nextHub;
     state=hub.competitions.find(c=>c.id===hub.activeCompetitionId)||hub.competitions[0];
     progressCompetition();
-    saveState();route='home';render();toast('Archiwum danych zaimportowane');
+    saveState({firebase:false});
+    firebaseBridge()?.syncFull?.(clone(hub), {force:true});
+    route='home';render();toast('Archiwum danych zaimportowane i wysłane do Firebase');
   }catch(e){console.error(e);toast('Nieprawidłowy plik kopii');}};reader.readAsText(file);
 }
 
@@ -4210,7 +4334,7 @@ function resetAll() {
   if (!requireOrganizer()) return;
   if(!confirm('Usunąć całe archiwum: wszystkie ligi, turnieje, pojedyncze mecze, treningi, zawodników i wyniki?'))return;
   if(!confirm('To ostatnie potwierdzenie. Tej operacji nie można cofnąć.'))return;
-  hub=defaultHub();state=hub.competitions[0];saveHub();route='home';render();toast('Całe archiwum zostało usunięte');
+  hub=defaultHub();state=hub.competitions[0];saveHub({firebase:'full'});route='home';render();toast('Całe archiwum zostało usunięte');
 }
 
 function updateInstallButton() {
@@ -4231,7 +4355,17 @@ window.addEventListener('storage', event => {
   reloadTabletData();
   render();
 });
-if('serviceWorker' in navigator){window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js?v=1.8.0').catch(console.error));}
+window.addEventListener('dartliga-firebase-status', event => {
+  firebaseSyncStatus = event.detail || {state:'error', message:'Nieznany stan Firebase'};
+  updateFirebaseStatusUI();
+});
+window.addEventListener('dartliga-firebase-hub', event => {
+  applyFirebaseRemoteHub(event.detail?.hub);
+});
+window.addEventListener('dartliga-firebase-ready', () => {
+  firebaseBridge()?.bootstrap?.(clone(hub));
+});
+if('serviceWorker' in navigator){window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js?v=1.9.0').catch(console.error));}
 
 applyStartupTabletView();
 if (!isTabletRoute() && progressCompetition()) saveState();

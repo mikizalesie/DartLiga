@@ -2,7 +2,7 @@
 
 const LEGACY_STORAGE_KEY = 'dartliga_pwa_state_v1';
 const STORAGE_KEY = 'dartliga_pwa_hub_v2';
-const APP_VERSION = '1.6.1';
+const APP_VERSION = '1.7.0';
 let route = 'home';
 let matchFilter = 'all';
 let tableGroup = 'all';
@@ -33,6 +33,7 @@ function defaultCompetition(overrides = {}) {
       startScore: 501,
       legsToWin: 2,
       setsToWin: 0,
+      boardsCount: 1,
       groupsCount: 2,
       qualifiersPerGroup: 2,
       knockoutLegs: {
@@ -93,6 +94,7 @@ function defaultHub() {
   const competition = defaultCompetition();
   return {
     version: APP_VERSION,
+    appRole: 'organizer',
     activeCompetitionId: competition.id,
     competitions: [competition],
     singleMatches: [],
@@ -143,6 +145,7 @@ function normalizeSingleLive(value) {
     startScore,
     legsToWin,
     setsToWin,
+    boardNumber: Number(value.boardNumber ?? match.boardNumber) >= 1 ? Math.floor(Number(value.boardNumber ?? match.boardNumber)) : null,
     doubleOut: value.doubleOut !== false,
     remaining: {
       [playerA]: Number(value.remaining?.[playerA]) >= 0 ? Number(value.remaining[playerA]) : startScore,
@@ -487,6 +490,9 @@ function normalizeCompetition(value = {}) {
   }
   const fallbackLive = competition.matches.find(match => match.status === 'live' && match.liveData);
   if (!competition.live && fallbackLive) competition.live = clone(fallbackLive.liveData);
+  const activeLiveCount = competition.matches.filter(match=>match.status==='live' && match.liveData).length;
+  competition.settings.boardsCount = Math.max(competitionBoardsCount(competition), activeLiveCount || 1);
+  normalizeCompetitionBoardAssignments(competition);
   return competition;
 }
 
@@ -500,6 +506,7 @@ function normalizeMatch(match = {}, settings = {}) {
     startScore: Number(match.startScore) || Number(settings.startScore) || 501,
     legsToWin: Number(match.legsToWin) || (bracket ? knockoutLegsForStage(stageKey, settings) : Number(settings.legsToWin) || 2),
     setsToWin: Math.max(0, Number(match.setsToWin ?? settings.setsToWin) || 0),
+    boardNumber: Number(match.boardNumber) >= 1 ? Math.floor(Number(match.boardNumber)) : null,
     legsA: Math.max(0, Number(match.legsA) || 0),
     legsB: Math.max(0, Number(match.legsB) || 0),
     setsA: Math.max(0, Number(match.setsA) || 0),
@@ -522,6 +529,7 @@ function loadHub() {
         return {
           ...parsed,
           version: APP_VERSION,
+          appRole: parsed.appRole === 'user' ? 'user' : 'organizer',
           activeCompetitionId,
           competitions,
           singleMatches: Array.isArray(parsed.singleMatches) ? parsed.singleMatches.map(normalizeSingleMatchRecord) : [],
@@ -539,6 +547,7 @@ function loadHub() {
       const competition = normalizeCompetition(legacy);
       return {
         version: APP_VERSION,
+        appRole: 'organizer',
         activeCompetitionId: competition.id,
         competitions: [competition],
         singleMatches: [],
@@ -558,6 +567,129 @@ function loadHub() {
 
 let hub = loadHub();
 let state = hub.competitions.find(c => c.id === hub.activeCompetitionId) || hub.competitions[0];
+
+
+const ROLE_NAVIGATION = {
+  organizer: [
+    ['home','☷','Moje rozgrywki'],
+    ['dashboard','⌂','Pulpit aktywnej'],
+    ['competition','♟','Konfiguracja'],
+    ['matches','◉','Mecze'],
+    ['live','●','Na żywo'],
+    ['tables','▦','Tabele'],
+    ['stats','↗','Statystyki'],
+    ['settings','⚙','Ustawienia']
+  ],
+  user: [
+    ['home','☷','Moje rozgrywki'],
+    ['dashboard','⌂','Pulpit aktywnej'],
+    ['matches','◉','Mecze'],
+    ['live','●','Na żywo'],
+    ['tables','▦','Tabele'],
+    ['stats','↗','Statystyki'],
+    ['single','◎','Pojedynczy mecz'],
+    ['training','◈','Trening']
+  ]
+};
+
+function currentAppRole() {
+  return hub.appRole === 'user' ? 'user' : 'organizer';
+}
+
+function isOrganizer() {
+  return currentAppRole() === 'organizer';
+}
+
+function roleLabel(role = currentAppRole()) {
+  return role === 'organizer' ? 'Organizator' : 'Użytkownik';
+}
+
+function routePermissionKey(routeName = route) {
+  if (routeName === 'scorer') return 'matches';
+  if (routeName === 'singleScorer') return 'single';
+  if (routeName === 'trainingRun' || routeName === 'trainingSetup') return 'training';
+  return routeName;
+}
+
+function isRouteAllowed(routeName = route, role = currentAppRole()) {
+  const key = routePermissionKey(routeName);
+  return (ROLE_NAVIGATION[role] || ROLE_NAVIGATION.organizer).some(item => item[0] === key);
+}
+
+function roleNavigation(role = currentAppRole()) {
+  return ROLE_NAVIGATION[role] || ROLE_NAVIGATION.organizer;
+}
+
+function switchAppRole(nextRole) {
+  const role = nextRole === 'user' ? 'user' : 'organizer';
+  if (role === currentAppRole()) return;
+  hub.appRole = role;
+  newCompetitionPanelOpen = false;
+  if (dartbotTimer) { clearTimeout(dartbotTimer); dartbotTimer = null; }
+  if (!isRouteAllowed(route, role)) route = 'home';
+  saveHub();
+  render();
+  toast(`Włączono tryb: ${roleLabel(role)}`);
+}
+
+function roleSwitcher(compact = false) {
+  const role = currentAppRole();
+  return `<div class="role-switch ${compact?'compact':''}" role="group" aria-label="Tryb aplikacji">
+    <button type="button" data-app-role="organizer" class="${role==='organizer'?'active':''}" title="Tryb organizatora"><span aria-hidden="true">♛</span>${compact?'':`<b>Organizator</b>`}</button>
+    <button type="button" data-app-role="user" class="${role==='user'?'active':''}" title="Tryb użytkownika"><span aria-hidden="true">●</span>${compact?'':`<b>Użytkownik</b>`}</button>
+  </div>`;
+}
+
+function competitionBoardsCount(competition = state) {
+  return Math.max(1, Math.min(64, Math.floor(Number(competition?.settings?.boardsCount) || 1)));
+}
+
+function activeBoardNumbers(competition = state, exceptMatchId = null) {
+  return new Set((competition?.matches || [])
+    .filter(match => match.status === 'live' && match.id !== exceptMatchId && match.liveData)
+    .map(match => Math.floor(Number(match.liveData?.boardNumber ?? match.boardNumber)))
+    .filter(number => number >= 1 && number <= competitionBoardsCount(competition)));
+}
+
+function nextAvailableBoard(competition = state, exceptMatchId = null) {
+  const used = activeBoardNumbers(competition, exceptMatchId);
+  for (let board = 1; board <= competitionBoardsCount(competition); board++) {
+    if (!used.has(board)) return board;
+  }
+  return null;
+}
+
+function normalizeCompetitionBoardAssignments(competition) {
+  if (!competition) return;
+  const limit = competitionBoardsCount(competition);
+  const used = new Set();
+  (competition.matches || []).filter(match => match.status === 'live' && match.liveData).forEach(match => {
+    let board = Math.floor(Number(match.liveData?.boardNumber ?? match.boardNumber));
+    if (!(board >= 1 && board <= limit) || used.has(board)) {
+      board = null;
+      for (let candidate = 1; candidate <= limit; candidate++) {
+        if (!used.has(candidate)) { board = candidate; break; }
+      }
+    }
+    match.boardNumber = board;
+    match.liveData.boardNumber = board;
+    if (board) used.add(board);
+  });
+  if (competition.live?.matchId) {
+    const match = competition.matches.find(item => item.id === competition.live.matchId);
+    if (match?.liveData) competition.live = clone(match.liveData);
+  }
+}
+
+function occupiedBoardsCount(competition = state) {
+  return activeBoardNumbers(competition).size;
+}
+
+function requireOrganizer(message = 'Ta funkcja jest dostępna w trybie Organizator') {
+  if (isOrganizer()) return true;
+  toast(message);
+  return false;
+}
 
 function isSingleScorer() {
   return route === 'singleScorer';
@@ -593,6 +725,7 @@ function scorerDoubleOut(live = scorerLive()) {
 }
 function saveHub() {
   hub.version = APP_VERSION;
+  hub.appRole = currentAppRole();
   hub.updatedAt = new Date().toISOString();
   localStorage.setItem(STORAGE_KEY, JSON.stringify(hub));
 }
@@ -714,18 +847,19 @@ function matchStartScore(match, settings = state?.settings || {}) {
 function competitionFormatSummary(competition = state) {
   const settings = competition.settings;
   const setsToWin = Math.max(0, Number(settings.setsToWin) || 0);
+  const boards = competitionBoardsCount(competition);
   if (settings.format === 'groups') {
     const rules = setsToWin > 0
       ? `set do ${settings.legsToWin} legów · do ${setsToWin} setów`
       : `do ${settings.legsToWin} legów`;
-    return `${settings.startScore} · grupy ${rules} · awans ${settings.qualifiersPerGroup} z grupy · puchar z różnymi limitami legów`;
+    return `${settings.startScore} · ${boards} ${boards===1?'tarcza':'tarcze'} · grupy ${rules} · awans ${settings.qualifiersPerGroup} z grupy · puchar z różnymi limitami legów`;
   }
   if (settings.format === 'knockout') {
-    return `${settings.startScore} · liczba legów zależna od etapu${setsToWin > 0 ? ` · do ${setsToWin} setów` : ''}`;
+    return `${settings.startScore} · ${boards} ${boards===1?'tarcza':'tarcze'} · liczba legów zależna od etapu${setsToWin > 0 ? ` · do ${setsToWin} setów` : ''}`;
   }
   return setsToWin > 0
-    ? `${settings.startScore} · set do ${settings.legsToWin} legów · do ${setsToWin} setów`
-    : `${settings.startScore} · do ${settings.legsToWin} wygranych legów`;
+    ? `${settings.startScore} · ${boards} ${boards===1?'tarcza':'tarcze'} · set do ${settings.legsToWin} legów · do ${setsToWin} setów`
+    : `${settings.startScore} · ${boards} ${boards===1?'tarcza':'tarcze'} · do ${settings.legsToWin} wygranych legów`;
 }
 
 function statusBadge(status) {
@@ -775,73 +909,66 @@ function competitionNumbers(competition) {
 }
 
 function navButton(id, icon, label) {
-  const activeRoute = route === 'scorer' ? 'live' : (route === 'singleScorer' ? 'single' : (route === 'trainingRun' || route === 'trainingSetup' ? 'training' : route));
+  const activeRoute = routePermissionKey(route);
   return `<button data-route="${id}" class="${activeRoute === id ? 'active' : ''}"><span class="ico">${icon}</span>${label}</button>`;
 }
 
 function render() {
+  if (!isRouteAllowed(route)) route = 'home';
+  const navigation = roleNavigation();
   const app = $('#app');
   app.innerHTML = `
-    <div class="app-shell">
+    <div class="app-shell role-${currentAppRole()}">
       <aside class="sidebar">
         <button class="brand brand-button" data-route="home"><div class="logo"></div><div><strong>DartLiga</strong><small>${hub.competitions.length} zapisanych rozgrywek</small></div></button>
+        ${roleSwitcher(false)}
+        <small class="role-test-label">Tryb testowy — bez logowania</small>
         <nav class="nav">
-          ${navButton('home','☷','Moje rozgrywki')}
-          ${navButton('dashboard','⌂','Pulpit aktywnej')}
-          ${navButton('competition','♟','Konfiguracja')}
-          ${navButton('matches','◉','Mecze')}
-          ${navButton('live','●','Na żywo')}
-          ${navButton('single','◎','Pojedynczy mecz')}
-          ${navButton('training','◈','Trening')}
-          ${navButton('tables','▦','Tabele')}
-          ${navButton('stats','↗','Statystyki')}
-          ${navButton('settings','⚙','Ustawienia')}
+          ${navigation.map(item=>navButton(...item)).join('')}
         </nav>
-        <button class="btn primary sidebar-new-competition" data-new-competition>+ Nowa rozgrywka</button>
+        ${isOrganizer()?'<button class="btn primary sidebar-new-competition" data-new-competition>+ Nowa rozgrywka</button>':''}
         <div class="active-competition-card">
           <span class="muted">Aktywna rozgrywka</span>
           <strong>${esc(state.settings.competitionName)}</strong>
+          <div class="active-competition-meta"><span>${competitionBoardsCount(state)} ${competitionBoardsCount(state)===1?'tarcza':'tarcze'}</span><span>${occupiedBoardsCount(state)} zajętych</span></div>
           ${competitionStatusBadge(state)}
         </div>
         <div class="sidebar-footer">
           <button id="installBtn" class="btn primary" style="display:none">Zainstaluj aplikację</button>
-          <span class="muted" style="font-size:11px;text-align:center">Wersja ${APP_VERSION}</span>
+          <span class="muted" style="font-size:11px;text-align:center">${roleLabel()} · Wersja ${APP_VERSION}</span>
         </div>
       </aside>
       <main class="main">
         <div class="mobile-head">
           <button class="brand brand-button" data-route="home"><div class="logo"></div><div><strong>DartLiga</strong><small>${esc(state.settings.competitionName)}</small></div></button>
-          <div class="row-actions"><button class="btn small primary" data-new-competition>+ Nowa</button><button class="btn small" data-route="settings">⚙</button></div>
+          <div class="mobile-role-actions">${roleSwitcher(true)}${isOrganizer()?'<button class="btn small primary" data-new-competition>+ Nowa</button>':''}</div>
         </div>
         ${renderRoute()}
       </main>
-      <nav class="mobile-nav">
-        ${mobileNav('home','☷','Rozgrywki')}
-        ${mobileNav('dashboard','⌂','Pulpit')}
-        ${mobileNav('matches','◉','Mecze')}
-        ${mobileNav('live','●','Live')}
-        ${mobileNav('single','◎','1 mecz')}
-        ${mobileNav('training','◈','Trening')}
-        ${mobileNav('tables','▦','Tabela')}
-        ${mobileNav('stats','↗','Stat.')}
+      <nav class="mobile-nav" style="grid-template-columns:repeat(${navigation.length},minmax(0,1fr))">
+        ${navigation.map(item=>mobileNav(...item)).join('')}
       </nav>
     </div>`;
 
   $$('[data-route]').forEach(btn => btn.addEventListener('click', () => {
-    route = btn.dataset.route;
+    const target = btn.dataset.route;
+    if (!isRouteAllowed(target)) return toast('Ta zakładka nie jest dostępna w wybranym trybie');
+    route = target;
     render();
   }));
+  $$('[data-app-role]').forEach(btn => btn.addEventListener('click',()=>switchAppRole(btn.dataset.appRole)));
   $$('[data-new-competition]').forEach(btn => btn.addEventListener('click', openNewCompetitionCreator));
   bindCurrentPage();
   updateInstallButton();
 }
 
 function mobileNav(id, icon, label) {
-  const activeRoute = route === 'scorer' ? 'live' : (route === 'singleScorer' ? 'single' : (route === 'trainingRun' || route === 'trainingSetup' ? 'training' : route));
+  const activeRoute = routePermissionKey(route);
   return `<button data-route="${id}" class="${activeRoute === id ? 'active' : ''}"><span>${icon}</span>${label}</button>`;
 }
 
 function renderRoute() {
+  if (!isRouteAllowed(route)) route = 'home';
   switch (route) {
     case 'home': return renderHome();
     case 'competition': return renderCompetition();
@@ -888,14 +1015,15 @@ function renderHome() {
   if (competitionFilter === 'active') competitions = competitions.filter(c => competitionState(c) !== 'completed');
   if (competitionFilter === 'completed') competitions = competitions.filter(c => competitionState(c) === 'completed');
   return `
-    ${pageHeader('Archiwum i aktywne sezony', 'Moje rozgrywki', 'Możesz równolegle prowadzić kilka lig, rozgrywek grupowych i turniejów. Każda rozgrywka zachowuje własnych zawodników, mecze, wyniki i statystyki.', `<button class="btn primary" id="showNewCompetition">+ Nowa rozgrywka</button>`)}
-    <section class="card new-competition-panel" id="newCompetitionPanel" ${newCompetitionPanelOpen ? '' : 'hidden'}>
+    ${pageHeader('Archiwum i aktywne sezony', 'Moje rozgrywki', isOrganizer() ? 'Zarządzaj ligami, grupami i turniejami. Każda rozgrywka przechowuje własnych zawodników, mecze, wyniki i statystyki.' : 'Wybierz rozgrywkę, aby zobaczyć pulpit, mecze, wyniki LIVE, tabele i statystyki.', isOrganizer()?`<button class="btn primary" id="showNewCompetition">+ Nowa rozgrywka</button>`:'' )}
+    ${isOrganizer()?`<section class="card new-competition-panel" id="newCompetitionPanel" ${newCompetitionPanelOpen ? '' : 'hidden'}>
       <div class="section-head"><div><h2>Utwórz nową rozgrywkę</h2><p class="muted">Ustal format i zasady przed dodaniem zawodników. Obecne rozgrywki pozostaną zapisane.</p></div><button class="btn small ghost" id="hideNewCompetition">Zamknij</button></div>
       <form id="newCompetitionForm" class="form-grid cols-3">
         <div class="field"><label>Nazwa</label><input name="competitionName" maxlength="80" placeholder="np. Liga Jesienna 2027" required></div>
         <div class="field"><label>Format</label><select name="format" id="newCompetitionFormat"><option value="league">Liga – każdy z każdym</option><option value="groups">Grupy + faza pucharowa</option><option value="knockout">Turniej pucharowy</option></select></div>
         <div class="field"><label>Data rozpoczęcia</label><input type="datetime-local" name="startedAt" value="${localDateTimeValue()}"></div>
         <div class="field"><label>Punkty startowe</label><select name="startScore">${[301,501,701,1001].map(v=>`<option ${v===501?'selected':''}>${v}</option>`).join('')}</select></div>
+        <div class="field"><label>Liczba dostępnych tarcz</label><input type="number" name="boardsCount" min="1" max="64" value="${defaults.boardsCount || 1}"><small class="field-help">Określa maksymalną liczbę równocześnie rozgrywanych meczów.</small></div>
         <div class="field" data-league-groups-field><label>Wygrane legi w meczu / secie</label><input type="number" name="legsToWin" min="1" max="15" value="${defaults.legsToWin}"><small class="field-help">Przy grze setowej jest to liczba legów potrzebnych do wygrania seta.</small></div>
         <div class="field"><label>Wygrane sety do zwycięstwa</label><input type="number" name="setsToWin" min="0" max="15" value="${defaults.setsToWin || 0}"><small class="field-help">Wpisz 0, aby grać wyłącznie na legi jak dotychczas.</small></div>
         <div class="field" data-groups-field hidden><label>Liczba grup</label><input type="number" name="groupsCount" min="2" max="12" value="${defaults.groupsCount}"></div>
@@ -906,10 +1034,10 @@ function renderHome() {
         </div>
         <div class="wide"><button class="btn primary" type="submit">Utwórz i przejdź do zawodników</button></div>
       </form>
-    </section>
+    </section>`:''}
     <div class="tabs competition-tabs">${filters.map(([id,label])=>`<button class="tab ${competitionFilter===id?'active':''}" data-competition-filter="${id}">${label} <span class="muted">${id==='all'?hub.competitions.length:hub.competitions.filter(c=>id==='completed'?competitionState(c)==='completed':competitionState(c)!=='completed').length}</span></button>`).join('')}</div>
     <section class="card competition-library">
-      ${competitions.length ? `<div class="competition-list">${competitions.map(competitionRow).join('')}</div>` : empty('Brak rozgrywek w tym widoku','Utwórz nową ligę albo zmień filtr.')}
+      ${competitions.length ? `<div class="competition-list">${competitions.map(competitionRow).join('')}</div>` : empty('Brak rozgrywek w tym widoku',isOrganizer()?'Utwórz nową ligę albo zmień filtr.':'Zmień filtr lub poproś organizatora o utworzenie rozgrywki.')}
     </section>`;
 }
 
@@ -920,14 +1048,13 @@ function competitionRow(competition) {
     <div class="competition-date"><span>Start</span><strong>${formatDateTime(competition.startedAt || competition.createdAt)}</strong></div>
     <div class="competition-main">
       <div class="competition-title-line"><h3>${esc(competition.settings?.competitionName || 'Rozgrywka bez nazwy')}</h3>${competitionStatusBadge(competition)}${active?'<span class="badge blue">Aktualnie otwarta</span>':''}</div>
-      <div class="competition-meta"><span>${formatLabel(competition.settings?.format)}</span><span>${numbers.players} zawodników</span><span>${numbers.completed}/${numbers.matches} meczów</span>${numbers.average?`<span>Śr. ${fmt(numbers.average)}</span>`:''}</div>
+      <div class="competition-meta"><span>${formatLabel(competition.settings?.format)}</span><span>${competitionBoardsCount(competition)} ${competitionBoardsCount(competition)===1?'tarcza':'tarcze'}</span><span>${numbers.players} zawodników</span><span>${numbers.completed}/${numbers.matches} meczów</span>${numbers.average?`<span>Śr. ${fmt(numbers.average)}</span>`:''}</div>
     </div>
     <div class="competition-actions">
       <button class="btn small primary open-competition" data-id="${competition.id}">${active?'Otwórz pulpit':'Przełącz i otwórz'}</button>
-      <button class="btn small ghost duplicate-competition" data-id="${competition.id}">Nowa na podstawie</button>
-      ${competition.status === 'completed'
+      ${isOrganizer()?`<button class="btn small ghost duplicate-competition" data-id="${competition.id}">Nowa na podstawie</button>${competition.status === 'completed'
         ? `<button class="btn small ghost reopen-competition" data-id="${competition.id}">Wznów</button>`
-        : `<button class="btn small ghost finish-competition" data-id="${competition.id}">Zakończ</button>`}
+        : `<button class="btn small ghost finish-competition" data-id="${competition.id}">Zakończ</button>`}`:''}
     </div>
   </article>`;
 }
@@ -946,12 +1073,13 @@ function renderDashboard() {
       : 'Faza pucharowa zostanie utworzona po zakończeniu grup')
     : '';
   return `
-    ${pageHeader('Centrum rozgrywek', esc(state.settings.competitionName), `${formatLabel(state.settings.format)} · ${competitionFormatSummary(state)} · start ${formatDateTime(state.startedAt)}`, `<button class="btn ghost" data-route="home">Wszystkie rozgrywki</button><button class="btn info" data-new-competition>+ Nowa rozgrywka</button><button class="btn primary" data-route="matches">Rozpocznij mecz</button>`)}
+    ${pageHeader('Centrum rozgrywek', esc(state.settings.competitionName), `${formatLabel(state.settings.format)} · ${competitionFormatSummary(state)} · start ${formatDateTime(state.startedAt)}`, `<button class="btn ghost" data-route="home">Wszystkie rozgrywki</button>${isOrganizer()?'<button class="btn info" data-new-competition>+ Nowa rozgrywka</button>':''}<button class="btn primary" data-route="matches">Mecze</button>`)}
     ${knockoutInfo ? `<div class="note safe-note" style="margin-bottom:16px"><strong>${knockoutInfo}</strong>${state.settings.format==='groups' ? ` · awansuje ${state.settings.qualifiersPerGroup} zawodników z każdej grupy.` : ''}</div>` : ''}
     <div class="grid stats">
       ${statCard('Zawodnicy', state.players.length, 'aktywnych w rozgrywkach')}
       ${statCard('Mecze zakończone', completed.length, `z ${state.matches.filter(m=>!m.bye).length} zaplanowanych`)}
       ${statCard('Do rozegrania', planned.length, live.length ? `${live.length} mecz w trakcie` : 'brak aktywnego meczu')}
+      ${statCard('Tarcze', `${occupiedBoardsCount(state)}/${competitionBoardsCount(state)}`, 'zajęte / dostępne')}
       ${statCard('Lider', leader ? esc(playerName(leader.playerId)) : '—', leader ? `${leader.points} pkt · bilans ${signed(leader.diff)}` : 'wygeneruj terminarz')}
     </div>
     <div class="grid two" style="margin-top:16px">
@@ -960,7 +1088,7 @@ function renderDashboard() {
         ${recent.length ? `<div class="match-list">${recent.map(matchRow).join('')}</div>` : empty('Brak wyników','Po rozegraniu pierwszego meczu wynik pojawi się tutaj.')}
       </section>
       <section class="card">
-        <div class="section-head"><h2>Następne mecze</h2><button class="btn small ghost" data-route="competition">Terminarz</button></div>
+        <div class="section-head"><h2>Następne mecze</h2><button class="btn small ghost" data-route="${isOrganizer()?'competition':'matches'}">${isOrganizer()?'Terminarz':'Wszystkie'}</button></div>
         ${next.length ? `<div class="match-list">${next.map(matchRow).join('')}</div>` : empty('Brak zaplanowanych meczów','Dodaj zawodników i wygeneruj terminarz.')}
       </section>
     </div>
@@ -998,6 +1126,7 @@ function renderCompetition() {
             <option value="knockout" ${format==='knockout'?'selected':''}>Turniej pucharowy</option>
           </select></div>
           <div class="field"><label>Punkty startowe</label><select name="startScore" ${structureLocked?'disabled':''}>${[301,501,701,1001].map(v=>`<option ${Number(state.settings.startScore)===v?'selected':''}>${v}</option>`).join('')}</select></div>
+          <div class="field"><label>Liczba dostępnych tarcz</label><input type="number" name="boardsCount" min="1" max="64" value="${competitionBoardsCount(state)}"><small class="field-help">Możesz zmieniać tę wartość również po wygenerowaniu terminarza. Nie może być mniejsza niż liczba aktywnych meczów.</small></div>
           <div class="field" data-current-league-groups ${format==='knockout'?'hidden':''}><label>Wygrane legi w meczu / secie</label><input type="number" name="legsToWin" min="1" max="15" value="${state.settings.legsToWin}" ${structureLocked?'disabled':''}><small class="field-help">Przy grze setowej jest to liczba legów potrzebnych do wygrania seta.</small></div>
           <div class="field"><label>Wygrane sety do zwycięstwa</label><input type="number" name="setsToWin" min="0" max="15" value="${Math.max(0,Number(state.settings.setsToWin)||0)}" ${structureLocked?'disabled':''}><small class="field-help">0 = mecz wyłącznie na legi. Wartość większa od 0 włącza sety.</small></div>
           <div class="field" data-current-groups ${format==='groups'?'':'hidden'}><label>Liczba grup</label><input type="number" name="groupsCount" min="2" max="12" value="${state.settings.groupsCount}" ${structureLocked?'disabled':''}></div>
@@ -1078,6 +1207,7 @@ function allLiveEntries() {
         title:competition.settings?.competitionName || 'Rozgrywka',
         subtitle:`${formatLabel(competition.settings?.format)} · ${roundLabel}`,
         rules:matchRuleText(live.legsToWin || matchLegsToWin(match, competition.settings), live.setsToWin ?? matchSetsToWin(match, competition.settings)),
+        boardNumber:Number(live.boardNumber || match.boardNumber) || null,
         live,
         playerAName:competitionPlayerName(competition, live.playerA),
         playerBName:competitionPlayerName(competition, live.playerB),
@@ -1171,7 +1301,7 @@ function liveEntryCard(entry) {
     <em class="live-points-score">${live.remaining?.[playerId] ?? live.startScore ?? 501}</em>
   </div>`;
   return `<article class="live-match-card">
-    <div class="live-match-head"><div><span class="live-dot">LIVE</span><strong>${esc(entry.rules)}</strong></div><span>${esc(entry.title)}</span></div>
+    <div class="live-match-head"><div><span class="live-dot">LIVE</span><strong>${esc(entry.rules)}</strong>${entry.boardNumber?`<span class="live-board-badge">Tarcza ${entry.boardNumber}</span>`:''}</div><span>${esc(entry.title)}</span></div>
     <div class="live-match-context">
       <span>${esc(entry.subtitle)}</span>
       <div class="live-column-labels ${setsMode?'with-sets':''}">${setsMode?'<small>Sety</small>':''}<small>Legi</small><small>Punkty</small></div>
@@ -1191,10 +1321,10 @@ function renderLiveCenter() {
   const competitions = new Set(all.filter(entry=>entry.kind==='competition').map(entry=>entry.competitionId)).size;
   return `${pageHeader('Centrum wyników', 'Wyniki na żywo', 'Podgląd wszystkich rozpoczętych meczów, bieżących legów, pozostałych punktów oraz średnich zawodników.', `<button class="btn ghost" id="refreshLive">Odśwież</button>`)}
     <div class="grid stats live-stats">
-      ${statCard('Mecze LIVE', all.length, all.length===1?'1 aktywna tarcza':'aktywne punktacje')}
+      ${statCard('Mecze LIVE', all.length, all.length===1?'1 aktywna punktacja':'aktywne punktacje')}
       ${statCard('Rozgrywki', competitions, 'z meczami w toku')}
       ${statCard('Zawodnicy', all.length*2, 'obecnie przy tarczach')}
-      ${statCard('Tryb', 'Lokalny', 'dane zapisane na tym urządzeniu')}
+      ${statCard('Tarcze aktywnej', `${occupiedBoardsCount(state)}/${competitionBoardsCount(state)}`, 'zajęte / dostępne')}
     </div>
     <section class="card compact live-toolbar">
       <form id="liveSearchForm" class="live-search-form"><input name="search" value="${esc(liveSearch)}" placeholder="Szukaj zawodnika, ligi albo turnieju"><button class="btn info" type="submit">Szukaj</button>${liveSearch?'<button class="btn ghost" type="button" id="clearLiveSearch">Wyczyść</button>':''}</form>
@@ -1213,6 +1343,12 @@ function openCompetitionLive(competitionId, matchId) {
   const match = state.matches.find(item => item.id === matchId);
   if (!match) return toast('Nie znaleziono meczu');
   state.live = normalizeCompetitionLive(match.liveData || (state.live?.matchId===matchId ? state.live : null), match, state.settings) || createLive(match);
+  if (!Number(state.live.boardNumber)) {
+    const board = nextAvailableBoard(state, match.id);
+    if (!board) return toast(`Wszystkie ${competitionBoardsCount(state)} tarcze są obecnie zajęte`);
+    state.live.boardNumber = board;
+    match.boardNumber = board;
+  }
   match.liveData = clone(state.live);
   match.status = 'live';
   saveState();
@@ -1226,7 +1362,7 @@ function renderMatches() {
     ['all','Wszystkie'],['planned','Do rozegrania'],['live','W trakcie'],['completed','Wyniki']
   ];
   return `
-    ${pageHeader('Terminarz', 'Mecze', 'Rozpocznij kilka punktacji równolegle albo wpisz wynik ręcznie.', allLiveEntries().some(entry=>entry.kind==='competition') ? '<button class="btn primary" data-route="live">Wyniki na żywo</button>' : '')}
+    ${pageHeader('Terminarz', 'Mecze', `Dostępne tarcze: ${competitionBoardsCount(state)} · zajęte: ${occupiedBoardsCount(state)}. ${isOrganizer()?'Możesz również wpisać wynik ręcznie.':'Wybierz zaplanowany mecz i rozpocznij punktację.'}`, allLiveEntries().some(entry=>entry.kind==='competition') ? '<button class="btn primary" data-route="live">Wyniki na żywo</button>' : '')}
     <div class="tabs">${filters.map(([id,label])=>`<button class="tab ${matchFilter===id?'active':''}" data-match-filter="${id}">${label} <span class="muted">${countFilter(id)}</span></button>`).join('')}</div>
     <section class="card">
       ${matches.length ? `<div class="match-list">${matches.map(matchRow).join('')}</div>` : empty('Brak meczów w tym widoku','Zmień filtr albo wygeneruj terminarz.')}
@@ -1256,6 +1392,7 @@ function matchRow(m) {
   const a = playerName(m.playerA), b = playerName(m.playerB);
   const roundLabel = m.bracketRound ? knockoutStageLabel(m.stageKey) : `Kolejka ${m.round || 1}`;
   const group = m.group ? ` · Grupa ${esc(m.group)}` : '';
+  const board = m.status === 'live' && Number(m.liveData?.boardNumber ?? m.boardNumber) ? ` · Tarcza ${Number(m.liveData?.boardNumber ?? m.boardNumber)}` : '';
   const setsToWin = matchSetsToWin(m);
   const target = ` · ${matchRuleText(matchLegsToWin(m), setsToWin)}`;
   const result = m.status === 'completed'
@@ -1264,8 +1401,8 @@ function matchRow(m) {
       : `<span class="score-pill">${m.legsA}:${m.legsB}</span>`)
     : '<span class="muted">vs</span>';
   const startLabel = m.status === 'live' ? 'Otwórz LIVE' : 'Licz punkty';
-  return `<div class="match-row"><div><div class="match-meta">${roundLabel}${group}${target}</div>${statusBadge(m.status)}</div><div class="match-pair"><span class="${m.winnerId===m.playerA?'winner':''}">${esc(a)}</span>${result}<span class="${m.winnerId===m.playerB?'winner':''}">${esc(b)}</span></div><div class="row-actions">
-    ${m.status !== 'completed' ? `<button class="btn small primary start-match" data-id="${m.id}">${startLabel}</button><button class="btn small ghost manual-result" data-id="${m.id}">Wpisz wynik</button>` : `<button class="btn small ghost reopen-match" data-id="${m.id}">Popraw</button>`}
+  return `<div class="match-row"><div><div class="match-meta">${roundLabel}${group}${board}${target}</div>${statusBadge(m.status)}</div><div class="match-pair"><span class="${m.winnerId===m.playerA?'winner':''}">${esc(a)}</span>${result}<span class="${m.winnerId===m.playerB?'winner':''}">${esc(b)}</span></div><div class="row-actions">
+    ${m.status !== 'completed' ? `<button class="btn small primary start-match" data-id="${m.id}">${startLabel}</button>${isOrganizer()?`<button class="btn small ghost manual-result" data-id="${m.id}">Wpisz wynik</button>`:''}` : (isOrganizer()?`<button class="btn small ghost reopen-match" data-id="${m.id}">Popraw</button>`:'<span class="badge green">Zakończony</span>')}
   </div></div>`;
 }
 
@@ -1780,7 +1917,7 @@ function renderScorer() {
     ? `${live.doubleOut !== false ? 'Double Out' : 'Straight Out'} · pojedynczy mecz`
     : dartbotTraining
       ? `trening · ${live.completedLegs||0}/${Number(hub.trainingLive?.settings?.legsCount)||5} legów · pełny Double Out`
-      : (match.bracketRound ? knockoutStageLabel(match.stageKey) : (match.group ? `Grupa ${match.group}` : 'mecz ligowy'));
+      : `${match.bracketRound ? knockoutStageLabel(match.stageKey) : (match.group ? `Grupa ${match.group}` : 'mecz ligowy')}${Number(live.boardNumber)?` · Tarcza ${Number(live.boardNumber)}`:''}`;
   const headerActions = dartbotTraining
     ? `<button class="btn ghost" data-route="training">Zapisz i wyjdź</button><button class="btn danger" id="abandonTrainingRun">Usuń trening</button>`
     : `<button class="btn ghost" data-route="${backRoute}">Zapisz i wyjdź</button>`;
@@ -1955,6 +2092,7 @@ function updateCurrentCompetitionFields() {
 }
 
 function openNewCompetitionCreator() {
+  if (!requireOrganizer()) return;
   newCompetitionPanelOpen = true;
   route = 'home';
   render();
@@ -1976,6 +2114,7 @@ function clonedPlayers(players) {
 }
 
 function duplicateCompetition(id) {
+  if (!requireOrganizer()) return;
   const source = hub.competitions.find(c => c.id === id);
   if (!source) return;
   saveState();
@@ -2019,6 +2158,7 @@ function settingsFromForm(data) {
     startScore: Number(data.get('startScore')) || Number(state.settings.startScore) || 501,
     legsToWin: Math.max(1, Number(data.get('legsToWin')) || Number(state.settings.legsToWin) || 2),
     setsToWin: Math.max(0, Number(data.get('setsToWin') ?? state.settings.setsToWin) || 0),
+    boardsCount: Math.max(1, Math.min(64, Number(data.get('boardsCount') ?? state.settings.boardsCount) || 1)),
     groupsCount: Math.max(2, Number(data.get('groupsCount')) || Number(state.settings.groupsCount) || 2),
     qualifiersPerGroup: Math.max(1, Number(data.get('qualifiersPerGroup')) || Number(state.settings.qualifiersPerGroup) || 1),
     knockoutLegs: knockoutLegsFromForm(data, state.settings.knockoutLegs),
@@ -2028,6 +2168,7 @@ function settingsFromForm(data) {
 }
 
 function createCompetition(event) {
+  if (!requireOrganizer()) return;
   event.preventDefault();
   const data = new FormData(event.currentTarget);
   const name = String(data.get('competitionName') || '').trim();
@@ -2041,6 +2182,7 @@ function createCompetition(event) {
       startScore: Number(data.get('startScore')) || 501,
       legsToWin: Math.max(1, Number(data.get('legsToWin')) || 2),
       setsToWin: Math.max(0, Number(data.get('setsToWin')) || 0),
+      boardsCount: Math.max(1, Math.min(64, Number(data.get('boardsCount')) || 1)),
       groupsCount: Math.max(2, Number(data.get('groupsCount')) || 2),
       qualifiersPerGroup: Math.max(1, Number(data.get('qualifiersPerGroup')) || 2),
       knockoutLegs: knockoutLegsFromForm(data, defaultCompetition().settings.knockoutLegs)
@@ -2061,6 +2203,7 @@ function createCompetition(event) {
 }
 
 function finishCompetition(id) {
+  if (!requireOrganizer()) return;
   const competition = hub.competitions.find(c => c.id === id);
   if (!competition) return;
   if (competition.live && !confirm('W tej rozgrywce jest rozpoczęty mecz. Zakończyć rozgrywkę bez usuwania zapisanego meczu?')) return;
@@ -2075,6 +2218,7 @@ function finishCompetition(id) {
 }
 
 function reopenCompetition(id) {
+  if (!requireOrganizer()) return;
   const competition = hub.competitions.find(c => c.id === id);
   if (!competition) return;
   competition.status = 'active';
@@ -2088,6 +2232,10 @@ function reopenCompetition(id) {
 
 function ensureCompetitionOpen() {
   if (state.status !== 'completed') return true;
+  if (!isOrganizer()) {
+    toast('Zakończoną rozgrywkę może wznowić organizator');
+    return false;
+  }
   if (!confirm('Ta rozgrywka jest oznaczona jako zakończona. Wznowić ją, aby wprowadzić zmiany?')) return false;
   state.status = 'active';
   state.completedAt = null;
@@ -2096,10 +2244,13 @@ function ensureCompetitionOpen() {
 }
 
 function saveCompetitionSettings(event) {
+  if (!requireOrganizer()) return;
   event.preventDefault();
   if (!ensureCompetitionOpen()) return;
   const data = new FormData(event.currentTarget);
   const requested = settingsFromForm(data);
+  const activeMatches = state.matches.filter(match=>match.status==='live' && match.liveData).length;
+  if (requested.boardsCount < activeMatches) return toast(`Nie można ustawić ${requested.boardsCount} tarcz. Obecnie trwa ${activeMatches} meczów.`);
   const oldFormat = state.settings.format;
 
   if (oldFormat !== requested.format && state.matches.length) {
@@ -2132,12 +2283,14 @@ function saveCompetitionSettings(event) {
   }
 
   state.settings = requested;
+  normalizeCompetitionBoardAssignments(state);
   saveState();
   render();
   toast('Ustawienia zapisane');
 }
 
 function addPlayer(event) {
+  if (!requireOrganizer()) return;
   event.preventDefault();
   if (!ensureCompetitionOpen()) return;
   if (state.matches.length) return toast('Nie można dodawać zawodników po wygenerowaniu terminarza');
@@ -2150,6 +2303,7 @@ function addPlayer(event) {
 }
 
 function editPlayer(id) {
+  if (!requireOrganizer()) return;
   if (!ensureCompetitionOpen()) return;
   const p = player(id); if (!p) return;
   const name = prompt('Nowa nazwa zawodnika:', p.name);
@@ -2161,6 +2315,7 @@ function editPlayer(id) {
 }
 
 function deletePlayer(id) {
+  if (!requireOrganizer()) return;
   if (!ensureCompetitionOpen()) return;
   if (state.matches.length) return toast('Nie można usuwać zawodników po wygenerowaniu terminarza');
   const p = player(id); if (!p) return;
@@ -2173,6 +2328,7 @@ function deletePlayer(id) {
 }
 
 function changePlayerGroup(id, group) {
+  if (!requireOrganizer()) return;
   if (!ensureCompetitionOpen()) return;
   if (state.matches.length) return toast('Grupy są zablokowane po wygenerowaniu terminarza');
   const p = player(id); if (!p) return;
@@ -2190,6 +2346,7 @@ function groupNamesFromPlayers() {
 }
 
 function autoAssignGroups() {
+  if (!requireOrganizer()) return;
   if (!ensureCompetitionOpen()) return;
   if (!state.players.length) return;
   autoAssignGroupsSilent();
@@ -2212,6 +2369,7 @@ function validateGroupSetup() {
 }
 
 function generateSchedule() {
+  if (!requireOrganizer()) return;
   if (!ensureCompetitionOpen()) return;
   if (state.players.length < 2) return toast('Dodaj co najmniej dwóch zawodników');
   if (state.matches.length) return toast('Ta rozgrywka ma już terminarz. Utwórz nową rozgrywkę, aby zachować historię.');
@@ -2227,6 +2385,7 @@ function generateSchedule() {
 }
 
 function regenerateSchedule() {
+  if (!requireOrganizer()) return;
   if (!ensureCompetitionOpen()) return;
   const protectedMatches = state.matches.some(m => m.status === 'completed' || m.status === 'live') || Boolean(state.live);
   if (protectedMatches) return toast('Nie można nadpisać terminarza z wynikami. Utwórz nową rozgrywkę.');
@@ -2591,7 +2750,16 @@ function startMatch(id) {
   if (!ensureCompetitionOpen()) return;
   const match=state.matches.find(m=>m.id===id); if(!match) return;
   syncActiveCompetitionLive();
-  state.live = normalizeCompetitionLive(match.liveData || (state.live?.matchId===id ? state.live : null), match, state.settings) || createLive(match);
+  const existing = normalizeCompetitionLive(match.liveData || (state.live?.matchId===id ? state.live : null), match, state.settings);
+  const live = existing || createLive(match);
+  if (!Number(live.boardNumber)) {
+    const board = nextAvailableBoard(state, match.id);
+    if (!board) return toast(`Wszystkie ${competitionBoardsCount(state)} tarcze są obecnie zajęte`);
+    live.boardNumber = board;
+    match.boardNumber = board;
+    if (!existing) toast(`Przydzielono tarczę ${board}`);
+  }
+  state.live = live;
   match.liveData = clone(state.live);
   match.status='live';
   saveState(); route='scorer'; render();
@@ -2604,7 +2772,7 @@ function createLive(match) {
   return {
     matchId:match.id,playerA:match.playerA,playerB:match.playerB,
     initialStarterId:match.playerA,legStarterId:match.playerA,currentPlayerId:match.playerA,
-    startScore,legsToWin,setsToWin,doubleOut:state.settings.doubleOut!==false,
+    startScore,legsToWin,setsToWin,boardNumber:null,doubleOut:state.settings.doubleOut!==false,
     remaining:{[match.playerA]:startScore,[match.playerB]:startScore},
     legs:{[match.playerA]:0,[match.playerB]:0},
     sets:{[match.playerA]:0,[match.playerB]:0},
@@ -2615,6 +2783,7 @@ function createLive(match) {
 }
 
 function manualResult(id) {
+  if (!requireOrganizer()) return;
   if (!ensureCompetitionOpen()) return;
   const match=state.matches.find(m=>m.id===id); if(!match) return;
   const legTarget=matchLegsToWin(match);
@@ -2646,7 +2815,7 @@ function manualResult(id) {
     winnerId=la===lb?null:(la>lb?match.playerA:match.playerB);
   }
 
-  match.legsA=la;match.legsB=lb;match.setsA=sa;match.setsB=sb;match.status='completed';match.winnerId=winnerId;match.stats=null;match.completedAt=new Date().toISOString();match.liveData=null;
+  match.legsA=la;match.legsB=lb;match.setsA=sa;match.setsB=sb;match.boardNumber=null;match.status='completed';match.winnerId=winnerId;match.stats=null;match.completedAt=new Date().toISOString();match.liveData=null;
   if(state.live?.matchId===id) state.live=null;
   const progress=progressCompetition();
   saveState();render();
@@ -2656,6 +2825,7 @@ function manualResult(id) {
 }
 
 function reopenMatch(id) {
+  if (!requireOrganizer()) return;
   if (!ensureCompetitionOpen()) return;
   const match=state.matches.find(m=>m.id===id); if(!match)return;
   if(!confirm('Usunąć wynik i ponownie otworzyć mecz?'))return;
@@ -2669,7 +2839,7 @@ function reopenMatch(id) {
     state.matches=state.matches.filter(m=>!m.bracketRound || (m.bracketRound||0)<=(match.bracketRound||0));
     state.knockout={...(state.knockout||{}),status:'active',championId:null,completedAt:null};
   }
-  match.status='planned';match.legsA=0;match.legsB=0;match.setsA=0;match.setsB=0;match.winnerId=null;match.stats=null;match.liveData=null;delete match.completedAt;
+  match.status='planned';match.legsA=0;match.legsB=0;match.setsA=0;match.setsB=0;match.boardNumber=null;match.winnerId=null;match.stats=null;match.liveData=null;delete match.completedAt;
   saveState();render();
 }
 
@@ -3170,7 +3340,7 @@ function finalizeLiveMatch(winnerId) {
 
   const match=state.matches.find(m=>m.id===live.matchId);
   if(!match)return;
-  match.legsA=totalLegsA;match.legsB=totalLegsB;match.setsA=setsA;match.setsB=setsB;match.winnerId=winnerId;match.status='completed';match.completedAt=new Date().toISOString();
+  match.legsA=totalLegsA;match.legsB=totalLegsB;match.setsA=setsA;match.setsB=setsB;match.boardNumber=null;match.winnerId=winnerId;match.status='completed';match.completedAt=new Date().toISOString();
   match.stats={
     [live.playerA]:summarizeLivePlayer(live.playerA,live),
     [live.playerB]:summarizeLivePlayer(live.playerB,live)
@@ -3598,6 +3768,7 @@ function submitSession45Stage(event){
 }
 
 function loadDemo() {
+  if (!requireOrganizer()) return;
   if((state.players.length||state.matches.length)&&!confirm('Dane demo zastąpią tylko aktualnie otwartą rozgrywkę. Pozostałe ligi i turnieje pozostaną bez zmian. Kontynuować?'))return;
   const currentId = state.id;
   const currentCreatedAt = state.createdAt;
@@ -3631,6 +3802,7 @@ function importData(event) {
       nextHub={
         ...imported,
         version:APP_VERSION,
+        appRole:imported.appRole==='user'?'user':'organizer',
         competitions,
         activeCompetitionId:competitions.some(c=>c.id===imported.activeCompetitionId)?imported.activeCompetitionId:competitions[0].id,
         singleMatches:Array.isArray(imported.singleMatches)?imported.singleMatches.map(normalizeSingleMatchRecord):[],
@@ -3641,7 +3813,7 @@ function importData(event) {
       };
     }else if(imported.settings&&Array.isArray(imported.players)&&Array.isArray(imported.matches)){
       const competition=normalizeCompetition(imported);
-      nextHub={version:APP_VERSION,activeCompetitionId:competition.id,competitions:[competition],singleMatches:[],singleLive:null,trainingSessions:[],trainingLive:null,trainingProfileName:'',createdAt:competition.createdAt,updatedAt:new Date().toISOString()};
+      nextHub={version:APP_VERSION,appRole:'organizer',activeCompetitionId:competition.id,competitions:[competition],singleMatches:[],singleLive:null,trainingSessions:[],trainingLive:null,trainingProfileName:'',createdAt:competition.createdAt,updatedAt:new Date().toISOString()};
     }else throw new Error('format');
     if(!confirm('Import zastąpi całe obecne archiwum lig, turniejów, pojedynczych meczów i treningów. Kontynuować?'))return;
     hub=nextHub;
@@ -3652,6 +3824,7 @@ function importData(event) {
 }
 
 function resetAll() {
+  if (!requireOrganizer()) return;
   if(!confirm('Usunąć całe archiwum: wszystkie ligi, turnieje, pojedyncze mecze, treningi, zawodników i wyniki?'))return;
   if(!confirm('To ostatnie potwierdzenie. Tej operacji nie można cofnąć.'))return;
   hub=defaultHub();state=hub.competitions[0];saveHub();route='home';render();toast('Całe archiwum zostało usunięte');
@@ -3668,7 +3841,7 @@ async function installApp() {
 
 window.addEventListener('beforeinstallprompt',event=>{event.preventDefault();deferredInstallPrompt=event;updateInstallButton();});
 window.addEventListener('appinstalled',()=>{deferredInstallPrompt=null;toast('Aplikacja została zainstalowana');});
-if('serviceWorker' in navigator){window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js?v=1.6.1').catch(console.error));}
+if('serviceWorker' in navigator){window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js?v=1.7.0').catch(console.error));}
 
 if (progressCompetition()) saveState();
 render();

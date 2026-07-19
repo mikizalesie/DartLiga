@@ -1,7 +1,7 @@
 {
   "name": "DartLiga PWA",
   "short_name": "DartLiga",
-  "description": "Licznik X01 lotka po lotce z podpowiedziami checkout, ligami, grupami, fazą pucharową, tabelami i archiwum rozgrywek.",
+  "description": "DartLiga PWA z trybem organizatora i użytkownika, licznikiem X01, obsługą wielu tarcz, ligami, turniejami, treningami i wynikami LIVE.",
   "lang": "pl",
   "start_url": "./",
   "scope": "./",

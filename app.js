@@ -2,7 +2,7 @@
 
 const LEGACY_STORAGE_KEY = 'dartliga_pwa_state_v1';
 const STORAGE_KEY = 'dartliga_pwa_hub_v2';
-const APP_VERSION = '1.3.0';
+const APP_VERSION = '1.3.1';
 let route = 'home';
 let matchFilter = 'all';
 let tableGroup = 'all';
@@ -729,6 +729,12 @@ function renderScorer() {
   const visits = live.visits.slice().reverse();
   const evaluation = evaluatePendingVisit(live);
   const pending = live.pendingDarts || [];
+  const selectedSegment =
+  Number.isInteger(Number(live.pendingSegment)) &&
+  Number(live.pendingSegment) >= 1 &&
+  Number(live.pendingSegment) <= 20
+    ? Number(live.pendingSegment)
+    : null;
   const locked = evaluation.bust || evaluation.checkout || pending.length >= 3;
   const canSubmit = evaluation.bust || evaluation.checkout || pending.length === 3;
   const submitLabel = evaluation.checkout ? 'Zatwierdź checkout' : (evaluation.bust ? 'Zatwierdź BUST' : 'Zatwierdź wizytę');
@@ -757,27 +763,105 @@ function renderScorer() {
               </div>
             </div>
 
-            <div class="multiplier-picker" aria-label="Wybierz mnożnik">
-              ${[['S','Singiel'],['D','Double'],['T','Triple']].map(([code,label])=>`<button type="button" class="multiplier-btn ${live.pendingMultiplier===code?'active':''}" data-multiplier="${code}" ${locked?'disabled':''}><b>${code}</b><span>${label}</span></button>`).join('')}
-            </div>
+            <div class="dart-step-head">
+      <span>1</span>
+      <div>
+        <strong>Wybierz numer pola</strong>
+        <small>Najpierw kliknij liczbę od 1 do 20.</small>
+      </div>
+    </div>
 
-            <div class="dart-number-grid" aria-label="Wybierz pole tarczy">
-              ${Array.from({length:20},(_,i)=>i+1).map(value=>`<button type="button" class="dart-number" data-segment="${value}" ${locked?'disabled':''}>${value}</button>`).join('')}
-            </div>
-            <div class="dart-special-grid">
-              <button type="button" class="dart-special" data-special="S25" ${locked?'disabled':''}><b>25</b><span>Outer Bull</span></button>
-              <button type="button" class="dart-special" data-special="DBULL" ${locked?'disabled':''}><b>50</b><span>Bull</span></button>
-              <button type="button" class="dart-special miss" data-special="MISS" ${locked?'disabled':''}><b>0</b><span>Pudło</span></button>
-            </div>
+    <div class="dart-number-grid" aria-label="Wybierz numer pola">
+      ${Array.from({length:20},(_,i)=>i+1).map(value=>`
+        <button
+          type="button"
+          class="dart-number ${selectedSegment===value?'selected':''}"
+          data-segment="${value}"
+          ${locked?'disabled':''}
+        >
+          ${value}
+        </button>
+      `).join('')}
+    </div>
+
+    <div class="dart-step-head second-step">
+      <span>2</span>
+      <div>
+        <strong>Wybierz rodzaj trafienia</strong>
+        <small>
+          ${selectedSegment
+            ? `Wybrane pole: ${selectedSegment}`
+            : 'Najpierw wybierz numer pola.'}
+        </small>
+      </div>
+    </div>
+
+    <div class="multiplier-picker" aria-label="Wybierz rodzaj trafienia">
+      ${[
+        ['S','Singiel',1],
+        ['D','Double',2],
+        ['T','Triple',3]
+      ].map(([code,label,multiplier])=>`
+        <button
+          type="button"
+          class="multiplier-btn"
+          data-multiplier="${code}"
+          ${locked||!selectedSegment?'disabled':''}
+        >
+          <b>${code}</b>
+          <span>
+            ${selectedSegment
+              ? `${label}: ${selectedSegment * multiplier} pkt`
+              : label}
+          </span>
+        </button>
+      `).join('')}
+    </div>
+
+    <div class="dart-special-label">
+      Bull lub pudło
+    </div>
+
+    <div class="dart-special-grid">
+      <button
+        type="button"
+        class="dart-special"
+        data-special="S25"
+        ${locked?'disabled':''}
+      >
+        <b>25</b>
+        <span>Outer Bull</span>
+      </button>
+
+      <button
+        type="button"
+        class="dart-special"
+        data-special="DBULL"
+        ${locked?'disabled':''}
+      >
+        <b>50</b>
+        <span>Bull</span>
+      </button>
+
+      <button
+        type="button"
+        class="dart-special miss"
+        data-special="MISS"
+        ${locked?'disabled':''}
+      >
+        <b>0</b>
+        <span>Pudło</span>
+      </button>
+    </div>
 
             <div class="dart-actions">
               <button class="btn primary" type="submit" ${canSubmit?'':'disabled'}>${submitLabel}</button>
-              <button class="btn ghost" type="button" id="undoDart" ${pending.length?'':'disabled'}>Cofnij lotkę</button>
-              <button class="btn ghost" type="button" id="clearDarts" ${pending.length?'':'disabled'}>Wyczyść wizytę</button>
+              <button class="btn ghost" type="button" id="undoDart" ${(pending.length||selectedSegment)?'':'disabled'}>Cofnij lotkę</button>
+              <button class="btn ghost" type="button" id="clearDarts" ${(pending.length||selectedSegment)?'':'disabled'}>Wyczyść wizytę</button>
               <button class="btn ghost" type="button" id="undoVisit" ${live.undo.length?'':'disabled'}>Cofnij ostatnią wizytę</button>
             </div>
           </form>
-          <div class="note" style="margin-top:14px">Wybierz Singiel, Double albo Triple, a następnie numer pola. Bull i pudło mają osobne przyciski. Przy checkout liczba użytych lotek jest liczona automatycznie. Obowiązuje zakończenie na double lub Bull 50.</div>
+          <div class="note" style="margin-top:14px">Najpierw wybierz numer pola, a następnie Singiel, Double albo Triple. Trzecia lotka automatycznie zapisuje wizytę, odejmuje punkty i przełącza zawodnika. Checkout i BUST również zapisują się automatycznie. Przed trzecią lotką możesz cofnąć lotkę albo wyczyścić wizytę.</div>
         </section>
         <section class="card">
           <div class="section-head"><h2>Historia wizyt</h2><span class="badge">${live.visits.length}</span></div>
@@ -821,8 +905,8 @@ function bindCurrentPage() {
   $$('.reopen-match').forEach(b=>b.addEventListener('click',()=>reopenMatch(b.dataset.id)));
   $$('[data-table-group]').forEach(b=>b.addEventListener('click',()=>{tableGroup=b.dataset.tableGroup;render();}));
   $('#scoreForm')?.addEventListener('submit', submitScore);
-  $$('.multiplier-btn').forEach(b=>b.addEventListener('click',()=>selectDartMultiplier(b.dataset.multiplier)));
-  $$('.dart-number').forEach(b=>b.addEventListener('click',()=>addPendingDart(Number(b.dataset.segment))));
+  $$('.multiplier-btn').forEach(b=>b.addEventListener('click',()=>addPendingDart(b.dataset.multiplier)));
+  $$('.dart-number').forEach(b=>b.addEventListener('click',()=>selectDartSegment(Number(b.dataset.segment))));
   $$('.dart-special').forEach(b=>b.addEventListener('click',()=>addSpecialDart(b.dataset.special)));
   $('#undoDart')?.addEventListener('click', undoPendingDart);
   $('#clearDarts')?.addEventListener('click', clearPendingDarts);
@@ -1582,40 +1666,190 @@ function visitNotation(visit) {
   return visit?.notation || '';
 }
 
-function selectDartMultiplier(multiplier) {
-  const live=state.live;if(!live||!['S','D','T'].includes(multiplier))return;
-  const evaluation=evaluatePendingVisit(live);
-  if(evaluation.bust||evaluation.checkout||(live.pendingDarts||[]).length>=3)return;
-  live.pendingMultiplier=multiplier;saveState();render();
+function selectDartSegment(segment) {
+  const live = state.live;
+
+  if (!live) return;
+
+  const evaluation = evaluatePendingVisit(live);
+
+  if (
+    evaluation.bust ||
+    evaluation.checkout ||
+    (live.pendingDarts || []).length >= 3
+  ) {
+    return;
+  }
+
+  const value = Number(segment);
+
+  if (
+    !Number.isInteger(value) ||
+    value < 1 ||
+    value > 20
+  ) {
+    return;
+  }
+
+  live.pendingSegment = value;
+
+  saveState();
+  render();
 }
 
-function addPendingDart(segment) {
-  const live=state.live;if(!live)return;
-  const evaluation=evaluatePendingVisit(live);
-  if(evaluation.bust||evaluation.checkout||(live.pendingDarts||[]).length>=3)return;
-  const value=Number(segment);if(!Number.isInteger(value)||value<1||value>20)return;
-  live.pendingDarts=live.pendingDarts||[];
-  live.pendingDarts.push(dartFromParts(value,live.pendingMultiplier||'S'));
-  saveState();render();
+function autoSubmitPendingVisit() {
+  const live = state.live;
+
+  if (!live) return false;
+
+  const evaluation = evaluatePendingVisit(live);
+  const dartsCount = (
+    live.pendingDarts || []
+  ).length;
+
+  const shouldSubmit =
+    evaluation.bust ||
+    evaluation.checkout ||
+    dartsCount >= 3;
+
+  if (!shouldSubmit) {
+    return false;
+  }
+
+  /*
+   * Zapisujemy trzecią lotkę w pamięci i pokazujemy ją
+   * na ekranie. Następnie zatwierdzamy całą wizytę.
+   */
+  saveState();
+  render();
+
+  setTimeout(() => {
+    submitScore({
+      preventDefault() {}
+    });
+  }, 0);
+
+  return true;
+}
+
+function addPendingDart(multiplier) {
+  const live = state.live;
+
+  if (
+    !live ||
+    !['S','D','T'].includes(multiplier)
+  ) {
+    return;
+  }
+
+  const evaluation = evaluatePendingVisit(live);
+
+  if (
+    evaluation.bust ||
+    evaluation.checkout ||
+    (live.pendingDarts || []).length >= 3
+  ) {
+    return;
+  }
+
+  const value = Number(live.pendingSegment);
+
+  if (
+    !Number.isInteger(value) ||
+    value < 1 ||
+    value > 20
+  ) {
+    return toast(
+      'Najpierw wybierz numer pola'
+    );
+  }
+
+  live.pendingDarts =
+    live.pendingDarts || [];
+
+  live.pendingDarts.push(
+    dartFromParts(value, multiplier)
+  );
+
+  live.pendingSegment = null;
+
+  if (autoSubmitPendingVisit()) {
+    return;
+  }
+
+  saveState();
+  render();
 }
 
 function addSpecialDart(code) {
-  const live=state.live;if(!live)return;
-  const evaluation=evaluatePendingVisit(live);
-  if(evaluation.bust||evaluation.checkout||(live.pendingDarts||[]).length>=3)return;
-  live.pendingDarts=live.pendingDarts||[];
-  live.pendingDarts.push(specialDart(code));
-  saveState();render();
+  const live = state.live;
+
+  if (!live) return;
+
+  const evaluation = evaluatePendingVisit(live);
+
+  if (
+    evaluation.bust ||
+    evaluation.checkout ||
+    (live.pendingDarts || []).length >= 3
+  ) {
+    return;
+  }
+
+  live.pendingDarts =
+    live.pendingDarts || [];
+
+  live.pendingSegment = null;
+
+  live.pendingDarts.push(
+    specialDart(code)
+  );
+
+  if (autoSubmitPendingVisit()) {
+    return;
+  }
+
+  saveState();
+  render();
 }
 
 function undoPendingDart() {
-  const live=state.live;if(!live?.pendingDarts?.length)return;
-  live.pendingDarts.pop();saveState();render();
+  const live = state.live;
+
+  if (!live) return;
+
+  if (
+    live.pendingSegment !== null &&
+    live.pendingSegment !== undefined
+  ) {
+    live.pendingSegment = null;
+
+    saveState();
+    render();
+
+    return;
+  }
+
+  if (!live.pendingDarts?.length) {
+    return;
+  }
+
+  live.pendingDarts.pop();
+
+  saveState();
+  render();
 }
 
 function clearPendingDarts() {
-  const live=state.live;if(!live)return;
-  live.pendingDarts=[];saveState();render();
+  const live = state.live;
+
+  if (!live) return;
+
+  live.pendingDarts = [];
+  live.pendingSegment = null;
+
+  saveState();
+  render();
 }
 
 function submitScore(event) {
@@ -1646,6 +1880,7 @@ function submitScore(event) {
   };
   live.visits.push(visit);
   live.pendingDarts=[];
+  live.pendingSegment=null;
   live.pendingMultiplier='S';
   if(!evaluation.bust)live.remaining[pid]=evaluation.remainingAfter;
   if(evaluation.checkout){

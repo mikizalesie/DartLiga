@@ -1027,3 +1027,124 @@ body.tablet-mode #app{min-height:100vh}
     padding:18px 22px;
   }
 }
+
+
+/* =========================================================
+   DartLiga 1.9.3 — hard reset for the full-screen board queue
+   A unique class prevents the legacy two-column queue layout
+   from taking control on wide screens.
+   ========================================================= */
+html:has(.tablet-queue-fixed),
+body:has(.tablet-queue-fixed){
+  width:100%;
+  min-width:0;
+  overflow-x:hidden;
+}
+.tablet-queue-screen.tablet-queue-fixed{
+  display:flex!important;
+  flex-direction:column!important;
+  grid-template-columns:none!important;
+  grid-template-rows:none!important;
+  align-items:stretch!important;
+  justify-content:flex-start!important;
+  width:100%!important;
+  max-width:1500px!important;
+  min-width:0!important;
+  min-height:calc(100vh - 62px);
+  margin:0 auto!important;
+  padding:clamp(14px,2vw,30px)!important;
+  gap:clamp(12px,1.4vw,22px)!important;
+}
+.tablet-queue-fixed>.tablet-queue-current,
+.tablet-queue-fixed>.tablet-queue-next,
+.tablet-queue-fixed>.tablet-empty-state{
+  position:relative;
+  display:block;
+  flex:0 0 auto;
+  width:100%!important;
+  max-width:100%!important;
+  min-width:0!important;
+  margin:0!important;
+  inset:auto!important;
+  transform:none!important;
+}
+.tablet-queue-fixed>.tablet-queue-current{
+  display:grid;
+  grid-template-columns:minmax(0,1fr);
+  align-content:start;
+  min-height:0;
+  overflow:hidden;
+}
+.tablet-queue-fixed .tablet-queue-current-heading{
+  width:100%;
+  min-width:0;
+}
+.tablet-queue-fixed .tablet-queue-scoreboard{
+  display:grid!important;
+  grid-template-columns:minmax(0,1fr) clamp(100px,10vw,150px) minmax(0,1fr)!important;
+  width:100%!important;
+  max-width:100%!important;
+  min-width:0!important;
+  gap:clamp(8px,1vw,14px)!important;
+}
+.tablet-queue-fixed .tablet-queue-scoreboard>*{
+  min-width:0!important;
+  max-width:100%;
+}
+.tablet-queue-fixed .tablet-score-player{
+  width:auto!important;
+  min-width:0!important;
+  min-height:clamp(220px,30vh,350px);
+}
+.tablet-queue-fixed .tablet-player-name{
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.tablet-queue-fixed .tablet-remaining{
+  font-size:clamp(76px,10vw,150px);
+}
+.tablet-queue-fixed>.tablet-queue-next{
+  display:grid!important;
+  grid-template-columns:clamp(82px,9vw,120px) minmax(0,1fr)!important;
+  align-items:center!important;
+}
+.tablet-queue-fixed>.tablet-queue-next>div:last-child{
+  min-width:0;
+}
+.tablet-queue-fixed>.tablet-queue-next strong,
+.tablet-queue-fixed>.tablet-queue-next small{
+  overflow-wrap:anywhere;
+}
+@media(min-width:1700px){
+  .tablet-queue-screen.tablet-queue-fixed{
+    max-width:1580px!important;
+  }
+  .tablet-queue-fixed .tablet-score-player{
+    min-height:360px;
+  }
+}
+@media(max-width:900px){
+  .tablet-queue-fixed .tablet-queue-scoreboard{
+    grid-template-columns:minmax(0,1fr) 92px minmax(0,1fr)!important;
+  }
+  .tablet-queue-fixed .tablet-score-player{
+    min-height:210px;
+    padding:12px;
+  }
+}
+@media(max-width:650px){
+  .tablet-queue-fixed .tablet-queue-current-heading{
+    display:grid;
+  }
+  .tablet-queue-fixed .tablet-queue-scoreboard{
+    grid-template-columns:1fr!important;
+  }
+  .tablet-queue-fixed .tablet-score-center{
+    min-height:74px;
+    grid-template-columns:1fr 1fr;
+  }
+  .tablet-queue-fixed>.tablet-queue-next{
+    grid-template-columns:72px minmax(0,1fr)!important;
+  }
+}

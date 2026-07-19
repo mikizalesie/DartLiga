@@ -2,7 +2,7 @@
 
 const LEGACY_STORAGE_KEY = 'dartliga_pwa_state_v1';
 const STORAGE_KEY = 'dartliga_pwa_hub_v2';
-const APP_VERSION = '1.9.2';
+const APP_VERSION = '1.9.3';
 let route = 'home';
 let matchFilter = 'all';
 let tableGroup = 'all';
@@ -1064,7 +1064,7 @@ function renderTabletQueue() {
   const current = boardCurrentMatch(tabletBoardNumber, state);
   const next = boardNextMatch(tabletBoardNumber, state);
   if (!current?.liveData) {
-    return `${tabletTopbar('queue')}<main class="tablet-queue-screen tablet-queue-waiting">
+    return `${tabletTopbar('queue')}<main class="tablet-queue-screen tablet-queue-fixed tablet-queue-waiting" style="display:flex;flex-direction:column;align-items:stretch;justify-content:flex-start;grid-template-columns:none;grid-template-rows:none;width:100%;max-width:1500px;margin:0 auto;min-width:0;">
       ${tabletEmptyState(`Tarcza ${tabletBoardNumber} jest wolna`, 'Gdy mecz zostanie rozpoczęty, w tym miejscu pojawi się pełny i czytelny wynik.', next)}
       ${tabletQueueNextMatch(next)}
     </main>`;
@@ -1073,8 +1073,8 @@ function renderTabletQueue() {
   const setMode = liveUsesSets(live);
   const checkout = liveCheckoutRoute(live);
   return `${tabletTopbar('queue')}
-    <main class="tablet-queue-screen">
-      <section class="tablet-queue-current">
+    <main class="tablet-queue-screen tablet-queue-fixed" style="display:flex;flex-direction:column;align-items:stretch;justify-content:flex-start;grid-template-columns:none;grid-template-rows:none;width:100%;max-width:1500px;margin:0 auto;min-width:0;">
+      <section class="tablet-queue-current" style="width:100%;min-width:0;flex:0 0 auto;">
         <div class="tablet-queue-current-heading">
           <div><span>Mecz obecny · Tarcza ${tabletBoardNumber}</span><h1>${esc(boardMatchNames(current))}</h1><p>${esc(boardMatchStage(current))} · ${esc(matchRuleText(live.legsToWin || matchLegsToWin(current), live.setsToWin || matchSetsToWin(current)))}</p></div>
           <strong>${esc(state.settings.competitionName)}</strong>

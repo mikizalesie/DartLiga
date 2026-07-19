@@ -433,3 +433,56 @@ hr{border:0;border-top:1px solid var(--line);margin:18px 0}.note{padding:12px 14
 .match-board-control select:focus{box-shadow:0 0 0 2px rgba(34,197,94,.2)}
 .match-board-static{display:inline-flex;align-items:center;justify-content:center;min-height:32px;padding:6px 10px;border:1px solid rgba(34,197,94,.34);border-radius:10px;background:rgba(34,197,94,.08);color:#86efac;font-size:12px;font-weight:950;white-space:nowrap}
 @media(max-width:760px){.match-board-control{grid-template-columns:auto 1fr}.match-board-control select{min-width:0}.match-row-actions{width:100%}}
+
+
+/* DartLiga 1.7.2 — czytelny terminarz i nazwa rozgrywki */
+.match-row.match-row-v172{
+  grid-template-columns:minmax(260px,1fr) minmax(132px,180px) auto;
+  gap:18px;
+  min-height:106px;
+  padding:16px 18px;
+}
+.match-summary-v172{display:grid;align-content:center;gap:10px;min-width:0}
+.match-pair-v172{font-size:17px;gap:10px}
+.match-status-v172{display:flex;align-items:center;gap:8px}
+.match-round-v172{
+  align-self:stretch;
+  display:grid;
+  place-content:center;
+  justify-items:center;
+  gap:2px;
+  min-width:132px;
+  padding:10px 16px;
+  border-left:1px solid var(--line);
+  border-right:1px solid var(--line);
+  text-align:center;
+}
+.match-round-v172>span{
+  color:var(--muted);
+  font-size:10px;
+  font-weight:950;
+  letter-spacing:.12em;
+  text-transform:uppercase;
+}
+.match-round-v172>strong{
+  color:var(--primary);
+  font-size:42px;
+  line-height:1;
+  font-weight:1000;
+  letter-spacing:-.04em;
+}
+.match-round-v172>small{color:#cbd5e1;font-size:11px;font-weight:850;margin-top:4px}
+.match-round-v172.stage>strong{font-size:22px;line-height:1.08;letter-spacing:-.02em}
+.match-row-v172 .match-row-actions{justify-content:flex-end;flex-wrap:wrap}
+@media(max-width:1050px){
+  .match-row.match-row-v172{grid-template-columns:minmax(220px,1fr) 120px}
+  .match-row-v172 .match-row-actions{grid-column:1/-1;justify-content:flex-end;border-top:1px solid var(--line);padding-top:12px}
+}
+@media(max-width:760px){
+  .match-row.match-row-v172{grid-template-columns:1fr;padding:14px}
+  .match-round-v172{grid-row:1;border:0;border-bottom:1px solid var(--line);padding:4px 8px 12px;min-height:0}
+  .match-round-v172>strong{font-size:34px}
+  .match-round-v172.stage>strong{font-size:20px}
+  .match-summary-v172{grid-row:2}
+  .match-row-v172 .match-row-actions{grid-row:3;grid-column:auto;justify-content:flex-start}
+}

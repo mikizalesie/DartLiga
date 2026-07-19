@@ -2,7 +2,7 @@
 
 const LEGACY_STORAGE_KEY = 'dartliga_pwa_state_v1';
 const STORAGE_KEY = 'dartliga_pwa_hub_v2';
-const APP_VERSION = '1.7.1';
+const APP_VERSION = '1.7.2';
 let route = 'home';
 let matchFilter = 'all';
 let tableGroup = 'all';
@@ -1393,7 +1393,7 @@ function renderMatches() {
     ['all','Wszystkie'],['planned','Do rozegrania'],['live','W trakcie'],['completed','Wyniki']
   ];
   return `
-    ${pageHeader('Terminarz', 'Mecze', `Dostępne tarcze: ${competitionBoardsCount(state)} · zajęte: ${occupiedBoardsCount(state)}. Tarcze są przypisane w terminarzu z góry. ${isOrganizer()?'Możesz zmienić przypisanie przed meczem lub w trakcie, o ile wybrana tarcza jest wolna.':'Wybierz mecz przypisany do wolnej tarczy i rozpocznij punktację.'}`, allLiveEntries().some(entry=>entry.kind==='competition') ? '<button class="btn primary" data-route="live">Wyniki na żywo</button>' : '')}
+    ${pageHeader('Terminarz', `Mecze — ${esc(state.settings.competitionName)}`, `Dostępne tarcze: ${competitionBoardsCount(state)} · zajęte: ${occupiedBoardsCount(state)}. Tarcze są przypisane w terminarzu z góry. ${isOrganizer()?'Możesz zmienić przypisanie przed meczem lub w trakcie, o ile wybrana tarcza jest wolna.':'Wybierz mecz przypisany do wolnej tarczy i rozpocznij punktację.'}`, allLiveEntries().some(entry=>entry.kind==='competition') ? '<button class="btn primary" data-route="live">Wyniki na żywo</button>' : '')}
     <div class="tabs">${filters.map(([id,label])=>`<button class="tab ${matchFilter===id?'active':''}" data-match-filter="${id}">${label} <span class="muted">${countFilter(id)}</span></button>`).join('')}</div>
     <section class="card">
       ${matches.length ? `<div class="match-list">${matches.map(matchRow).join('')}</div>` : empty('Brak meczów w tym widoku','Zmień filtr albo wygeneruj terminarz.')}
@@ -1434,22 +1434,33 @@ function matchBoardControl(match) {
 
 function matchRow(m) {
   const a = playerName(m.playerA), b = playerName(m.playerB);
-  const roundLabel = m.bracketRound ? knockoutStageLabel(m.stageKey) : `Kolejka ${m.round || 1}`;
-  const group = m.group ? ` · Grupa ${esc(m.group)}` : '';
-  const boardNumber = validBoardNumber(m.liveData?.boardNumber ?? m.boardNumber, state);
-  const board = boardNumber ? ` · Tarcza ${boardNumber}` : '';
+  const isKnockout = Boolean(m.bracketRound);
+  const roundNumber = Math.max(1, Number(m.round) || 1);
+  const roundTitle = isKnockout ? knockoutStageLabel(m.stageKey) : String(roundNumber);
+  const roundCaption = isKnockout ? 'Etap' : 'Kolejka';
+  const groupLabel = m.group ? `Grupa ${esc(m.group)}` : '';
   const setsToWin = matchSetsToWin(m);
-  const target = ` · ${matchRuleText(matchLegsToWin(m), setsToWin)}`;
   const result = m.status === 'completed'
     ? (setsToWin > 0
       ? `<span class="score-pill score-pill-sets"><strong>${m.setsA||0}:${m.setsB||0}</strong><small>legi ${m.legsA||0}:${m.legsB||0}</small></span>`
       : `<span class="score-pill">${m.legsA}:${m.legsB}</span>`)
     : '<span class="muted">vs</span>';
   const startLabel = m.status === 'live' ? 'Otwórz LIVE' : 'Licz punkty';
-  return `<div class="match-row"><div><div class="match-meta">${roundLabel}${group}${board}${target}</div>${statusBadge(m.status)}</div><div class="match-pair"><span class="${m.winnerId===m.playerA?'winner':''}">${esc(a)}</span>${result}<span class="${m.winnerId===m.playerB?'winner':''}">${esc(b)}</span></div><div class="row-actions match-row-actions">
-    ${matchBoardControl(m)}
-    ${m.status !== 'completed' ? `<button class="btn small primary start-match" data-id="${m.id}">${startLabel}</button>${isOrganizer()?`<button class="btn small ghost manual-result" data-id="${m.id}">Wpisz wynik</button>`:''}` : (isOrganizer()?`<button class="btn small ghost reopen-match" data-id="${m.id}">Popraw</button>`:'<span class="badge green">Zakończony</span>')}
-  </div></div>`;
+  return `<div class="match-row match-row-v172">
+    <div class="match-summary-v172">
+      <div class="match-pair match-pair-v172"><span class="${m.winnerId===m.playerA?'winner':''}">${esc(a)}</span>${result}<span class="${m.winnerId===m.playerB?'winner':''}">${esc(b)}</span></div>
+      <div class="match-status-v172">${statusBadge(m.status)}</div>
+    </div>
+    <div class="match-round-v172 ${isKnockout?'stage':''}">
+      <span>${roundCaption}</span>
+      <strong>${esc(roundTitle)}</strong>
+      ${groupLabel ? `<small>${groupLabel}</small>` : ''}
+    </div>
+    <div class="row-actions match-row-actions">
+      ${matchBoardControl(m)}
+      ${m.status !== 'completed' ? `<button class="btn small primary start-match" data-id="${m.id}">${startLabel}</button>${isOrganizer()?`<button class="btn small ghost manual-result" data-id="${m.id}">Wpisz wynik</button>`:''}` : (isOrganizer()?`<button class="btn small ghost reopen-match" data-id="${m.id}">Popraw</button>`:'<span class="badge green">Zakończony</span>')}
+    </div>
+  </div>`;
 }
 
 function renderTables() {

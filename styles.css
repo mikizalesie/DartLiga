@@ -423,3 +423,13 @@ hr{border:0;border-top:1px solid var(--line);margin:18px 0}.note{padding:12px 14
 .live-board-badge{display:inline-flex;align-items:center;padding:3px 7px;border-radius:999px;background:rgba(56,189,248,.13);color:#bae6fd;font-size:9px;font-weight:950;white-space:nowrap}
 .role-user .organizer-only{display:none!important}
 @media(max-width:760px){.role-test-label{display:none}.role-switch.compact{margin:0}.mobile-head{gap:8px}.mobile-role-actions .btn{padding:7px 9px}.mobile-nav{overflow-x:auto}.mobile-nav button{min-width:42px}}
+
+
+/* DartLiga 1.7.1 — planowane przypisania tarcz */
+.match-row-actions{align-items:center}
+.match-board-control{display:grid;grid-template-columns:auto minmax(104px,1fr);align-items:center;gap:7px;padding:5px 7px;border:1px solid rgba(34,197,94,.32);border-radius:10px;background:rgba(34,197,94,.07)}
+.match-board-control>span{font-size:9px;text-transform:uppercase;letter-spacing:.07em;color:#86efac;font-weight:950}
+.match-board-control select{min-width:116px;border:0;background:#0b1220;color:#dcfce7;border-radius:7px;padding:6px 8px;font-size:12px;font-weight:900;outline:none}
+.match-board-control select:focus{box-shadow:0 0 0 2px rgba(34,197,94,.2)}
+.match-board-static{display:inline-flex;align-items:center;justify-content:center;min-height:32px;padding:6px 10px;border:1px solid rgba(34,197,94,.34);border-radius:10px;background:rgba(34,197,94,.08);color:#86efac;font-size:12px;font-weight:950;white-space:nowrap}
+@media(max-width:760px){.match-board-control{grid-template-columns:auto 1fr}.match-board-control select{min-width:0}.match-row-actions{width:100%}}

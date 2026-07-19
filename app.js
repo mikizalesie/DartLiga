@@ -2,7 +2,7 @@
 
 const LEGACY_STORAGE_KEY = 'dartliga_pwa_state_v1';
 const STORAGE_KEY = 'dartliga_pwa_hub_v2';
-const APP_VERSION = '1.7.0';
+const APP_VERSION = '1.7.1';
 let route = 'home';
 let matchFilter = 'all';
 let tableGroup = 'all';
@@ -659,13 +659,43 @@ function nextAvailableBoard(competition = state, exceptMatchId = null) {
   return null;
 }
 
+function validBoardNumber(value, competition = state) {
+  const board = Math.floor(Number(value));
+  return board >= 1 && board <= competitionBoardsCount(competition) ? board : null;
+}
+
+function assignBoardsToMatches(competition = state, matches = null) {
+  if (!competition) return;
+  const limit = competitionBoardsCount(competition);
+  const targets = (Array.isArray(matches) ? matches : competition.matches || [])
+    .filter(match => match && !match.bye && match.status !== 'completed');
+  targets.forEach((match, index) => {
+    if (match.status === 'live' && match.liveData) return;
+    match.boardNumber = (index % limit) + 1;
+  });
+}
+
 function normalizeCompetitionBoardAssignments(competition) {
   if (!competition) return;
   const limit = competitionBoardsCount(competition);
+  const schedulable = (competition.matches || []).filter(match => !match.bye && match.status !== 'completed');
+
+  // Każdy zaplanowany mecz ma tarczę przypisaną z góry. Po zmianie liczby tarcz
+  // nieprawidłowe lub brakujące przypisania są rozkładane ponownie.
+  let plannedIndex = 0;
+  schedulable.forEach(match => {
+    if (match.status === 'live' && match.liveData) return;
+    const assigned = validBoardNumber(match.boardNumber, competition);
+    match.boardNumber = assigned || ((plannedIndex % limit) + 1);
+    plannedIndex += 1;
+  });
+
+  // Aktywne mecze muszą zajmować unikalne tarcze. Przypisanie w terminarzu
+  // jest używane jako pierwsza preferencja, a konflikt przenoszony na wolną tarczę.
   const used = new Set();
   (competition.matches || []).filter(match => match.status === 'live' && match.liveData).forEach(match => {
-    let board = Math.floor(Number(match.liveData?.boardNumber ?? match.boardNumber));
-    if (!(board >= 1 && board <= limit) || used.has(board)) {
+    let board = validBoardNumber(match.liveData?.boardNumber ?? match.boardNumber, competition);
+    if (!board || used.has(board)) {
       board = null;
       for (let candidate = 1; candidate <= limit; candidate++) {
         if (!used.has(candidate)) { board = candidate; break; }
@@ -675,6 +705,7 @@ function normalizeCompetitionBoardAssignments(competition) {
     match.liveData.boardNumber = board;
     if (board) used.add(board);
   });
+
   if (competition.live?.matchId) {
     const match = competition.matches.find(item => item.id === competition.live.matchId);
     if (match?.liveData) competition.live = clone(match.liveData);
@@ -1362,7 +1393,7 @@ function renderMatches() {
     ['all','Wszystkie'],['planned','Do rozegrania'],['live','W trakcie'],['completed','Wyniki']
   ];
   return `
-    ${pageHeader('Terminarz', 'Mecze', `Dostępne tarcze: ${competitionBoardsCount(state)} · zajęte: ${occupiedBoardsCount(state)}. ${isOrganizer()?'Możesz również wpisać wynik ręcznie.':'Wybierz zaplanowany mecz i rozpocznij punktację.'}`, allLiveEntries().some(entry=>entry.kind==='competition') ? '<button class="btn primary" data-route="live">Wyniki na żywo</button>' : '')}
+    ${pageHeader('Terminarz', 'Mecze', `Dostępne tarcze: ${competitionBoardsCount(state)} · zajęte: ${occupiedBoardsCount(state)}. Tarcze są przypisane w terminarzu z góry. ${isOrganizer()?'Możesz zmienić przypisanie przed meczem lub w trakcie, o ile wybrana tarcza jest wolna.':'Wybierz mecz przypisany do wolnej tarczy i rozpocznij punktację.'}`, allLiveEntries().some(entry=>entry.kind==='competition') ? '<button class="btn primary" data-route="live">Wyniki na żywo</button>' : '')}
     <div class="tabs">${filters.map(([id,label])=>`<button class="tab ${matchFilter===id?'active':''}" data-match-filter="${id}">${label} <span class="muted">${countFilter(id)}</span></button>`).join('')}</div>
     <section class="card">
       ${matches.length ? `<div class="match-list">${matches.map(matchRow).join('')}</div>` : empty('Brak meczów w tym widoku','Zmień filtr albo wygeneruj terminarz.')}
@@ -1388,11 +1419,25 @@ function countFilter(filter) {
   return filter === 'all' ? list.length : list.filter(m=>m.status===filter).length;
 }
 
+function matchBoardControl(match) {
+  const board = validBoardNumber(match.liveData?.boardNumber ?? match.boardNumber, state);
+  if (!isOrganizer() || match.status === 'completed') {
+    return board ? `<span class="match-board-static">Tarcza ${board}</span>` : '<span class="match-board-static muted">Bez tarczy</span>';
+  }
+  const selectedBoard = board || 1;
+  const occupiedByOthers = match.status === 'live' ? activeBoardNumbers(state, match.id) : new Set();
+  const options = Array.from({length:competitionBoardsCount(state)},(_,index)=>index+1).map(number =>
+    `<option value="${number}" ${number===selectedBoard?'selected':''} ${occupiedByOthers.has(number)?'disabled':''}>Tarcza ${number}${occupiedByOthers.has(number)?' — zajęta':''}</option>`
+  ).join('');
+  return `<label class="match-board-control"><span>Tarcza</span><select class="match-board-select" data-id="${match.id}">${options}</select></label>`;
+}
+
 function matchRow(m) {
   const a = playerName(m.playerA), b = playerName(m.playerB);
   const roundLabel = m.bracketRound ? knockoutStageLabel(m.stageKey) : `Kolejka ${m.round || 1}`;
   const group = m.group ? ` · Grupa ${esc(m.group)}` : '';
-  const board = m.status === 'live' && Number(m.liveData?.boardNumber ?? m.boardNumber) ? ` · Tarcza ${Number(m.liveData?.boardNumber ?? m.boardNumber)}` : '';
+  const boardNumber = validBoardNumber(m.liveData?.boardNumber ?? m.boardNumber, state);
+  const board = boardNumber ? ` · Tarcza ${boardNumber}` : '';
   const setsToWin = matchSetsToWin(m);
   const target = ` · ${matchRuleText(matchLegsToWin(m), setsToWin)}`;
   const result = m.status === 'completed'
@@ -1401,7 +1446,8 @@ function matchRow(m) {
       : `<span class="score-pill">${m.legsA}:${m.legsB}</span>`)
     : '<span class="muted">vs</span>';
   const startLabel = m.status === 'live' ? 'Otwórz LIVE' : 'Licz punkty';
-  return `<div class="match-row"><div><div class="match-meta">${roundLabel}${group}${board}${target}</div>${statusBadge(m.status)}</div><div class="match-pair"><span class="${m.winnerId===m.playerA?'winner':''}">${esc(a)}</span>${result}<span class="${m.winnerId===m.playerB?'winner':''}">${esc(b)}</span></div><div class="row-actions">
+  return `<div class="match-row"><div><div class="match-meta">${roundLabel}${group}${board}${target}</div>${statusBadge(m.status)}</div><div class="match-pair"><span class="${m.winnerId===m.playerA?'winner':''}">${esc(a)}</span>${result}<span class="${m.winnerId===m.playerB?'winner':''}">${esc(b)}</span></div><div class="row-actions match-row-actions">
+    ${matchBoardControl(m)}
     ${m.status !== 'completed' ? `<button class="btn small primary start-match" data-id="${m.id}">${startLabel}</button>${isOrganizer()?`<button class="btn small ghost manual-result" data-id="${m.id}">Wpisz wynik</button>`:''}` : (isOrganizer()?`<button class="btn small ghost reopen-match" data-id="${m.id}">Popraw</button>`:'<span class="badge green">Zakończony</span>')}
   </div></div>`;
 }
@@ -2052,6 +2098,7 @@ function bindCurrentPage() {
   $$('[data-live-competition]').forEach(b=>b.addEventListener('click',()=>openCompetitionLive(b.dataset.liveCompetition,b.dataset.liveMatch)));
   $('[data-live-single]')?.addEventListener('click',()=>{route='singleScorer';render();});
   $('[data-live-training]')?.addEventListener('click',()=>{route='trainingRun';render();});
+  $$('.match-board-select').forEach(select=>select.addEventListener('change',()=>changeMatchBoard(select.dataset.id,select.value)));
   $$('.start-match').forEach(b=>b.addEventListener('click',()=>startMatch(b.dataset.id)));
   $$('.manual-result').forEach(b=>b.addEventListener('click',()=>manualResult(b.dataset.id)));
   $$('.reopen-match').forEach(b=>b.addEventListener('click',()=>reopenMatch(b.dataset.id)));
@@ -2252,6 +2299,7 @@ function saveCompetitionSettings(event) {
   const activeMatches = state.matches.filter(match=>match.status==='live' && match.liveData).length;
   if (requested.boardsCount < activeMatches) return toast(`Nie można ustawić ${requested.boardsCount} tarcz. Obecnie trwa ${activeMatches} meczów.`);
   const oldFormat = state.settings.format;
+  const oldBoardsCount = competitionBoardsCount(state);
 
   if (oldFormat !== requested.format && state.matches.length) {
     const createNew = confirm('Ta rozgrywka ma już zapisany terminarz. Jej format nie zostanie zmieniony. Utworzyć NOWĄ, osobną rozgrywkę w wybranym formacie i skopiować zawodników?');
@@ -2283,6 +2331,9 @@ function saveCompetitionSettings(event) {
   }
 
   state.settings = requested;
+  if (oldBoardsCount !== requested.boardsCount) {
+    assignBoardsToMatches(state, state.matches.filter(match=>match.status==='planned' && !match.bye));
+  }
   normalizeCompetitionBoardAssignments(state);
   saveState();
   render();
@@ -2416,12 +2467,14 @@ function buildSchedule() {
   };
   if (state.settings.format === 'league') {
     state.matches = roundRobin(state.players.map(p=>p.id), null, 'league');
+    assignBoardsToMatches(state, state.matches);
   } else if (state.settings.format === 'groups') {
     if (state.players.some(p=>!p.group)) autoAssignGroupsSilent();
     groupNames().forEach(group=>{
       const ids=state.players.filter(p=>p.group===group).map(p=>p.id);
       state.matches.push(...roundRobin(ids, group, 'group'));
     });
+    assignBoardsToMatches(state, state.matches);
     state.knockout.status = 'waiting';
   } else {
     createInitialKnockout(shuffle(state.players.map(p=>p.id)), []);
@@ -2535,6 +2588,7 @@ function createKnockoutRoundFromSlots(slots, bracketRound) {
     ? slots.slice()
     : [...slots, ...Array(nextPowerOfTwo(slots.length) - slots.length).fill(null)];
   const stageKey = stageKeyForSize(normalizedSlots.length);
+  const createdMatches = [];
   for(let i=0;i<normalizedSlots.length;i+=2){
     const a=normalizedSlots[i] || null;
     const b=normalizedSlots[i+1] || null;
@@ -2553,7 +2607,9 @@ function createKnockoutRoundFromSlots(slots, bracketRound) {
       m.completedAt=new Date().toISOString();
     }
     state.matches.push(m);
+    if (!m.bye) createdMatches.push(m);
   }
+  assignBoardsToMatches(state, createdMatches);
   progressKnockout();
 }
 
@@ -2746,19 +2802,42 @@ function deleteSingleMatch(id) {
   toast('Mecz usunięty z historii');
 }
 
+function changeMatchBoard(id, value) {
+  if (!requireOrganizer()) return;
+  const match = state.matches.find(item=>item.id===id);
+  if (!match || match.status === 'completed') return;
+  const board = validBoardNumber(value, state);
+  if (!board) return toast('Wybierz prawidłowy numer tarczy');
+  if (match.status === 'live' && activeBoardNumbers(state, match.id).has(board)) {
+    render();
+    return toast(`Tarcza ${board} jest obecnie zajęta przez inny mecz`);
+  }
+  match.boardNumber = board;
+  if (match.liveData) match.liveData.boardNumber = board;
+  if (state.live?.matchId === match.id) state.live.boardNumber = board;
+  saveState();
+  render();
+  toast(`Mecz przypisano do tarczy ${board}`);
+}
+
 function startMatch(id) {
   if (!ensureCompetitionOpen()) return;
   const match=state.matches.find(m=>m.id===id); if(!match) return;
   syncActiveCompetitionLive();
   const existing = normalizeCompetitionLive(match.liveData || (state.live?.matchId===id ? state.live : null), match, state.settings);
   const live = existing || createLive(match);
-  if (!Number(live.boardNumber)) {
-    const board = nextAvailableBoard(state, match.id);
+  const used = activeBoardNumbers(state, match.id);
+  let board = validBoardNumber(live.boardNumber ?? match.boardNumber, state);
+  if (!board) {
+    board = nextAvailableBoard(state, match.id);
     if (!board) return toast(`Wszystkie ${competitionBoardsCount(state)} tarcze są obecnie zajęte`);
-    live.boardNumber = board;
     match.boardNumber = board;
-    if (!existing) toast(`Przydzielono tarczę ${board}`);
   }
+  if (used.has(board)) {
+    return toast(`Przypisana tarcza ${board} jest zajęta. Organizator może przepisać mecz na wolną tarczę.`);
+  }
+  live.boardNumber = board;
+  match.boardNumber = board;
   state.live = live;
   match.liveData = clone(state.live);
   match.status='live';
@@ -2815,7 +2894,7 @@ function manualResult(id) {
     winnerId=la===lb?null:(la>lb?match.playerA:match.playerB);
   }
 
-  match.legsA=la;match.legsB=lb;match.setsA=sa;match.setsB=sb;match.boardNumber=null;match.status='completed';match.winnerId=winnerId;match.stats=null;match.completedAt=new Date().toISOString();match.liveData=null;
+  match.legsA=la;match.legsB=lb;match.setsA=sa;match.setsB=sb;match.status='completed';match.winnerId=winnerId;match.stats=null;match.completedAt=new Date().toISOString();match.liveData=null;
   if(state.live?.matchId===id) state.live=null;
   const progress=progressCompetition();
   saveState();render();
@@ -2839,7 +2918,7 @@ function reopenMatch(id) {
     state.matches=state.matches.filter(m=>!m.bracketRound || (m.bracketRound||0)<=(match.bracketRound||0));
     state.knockout={...(state.knockout||{}),status:'active',championId:null,completedAt:null};
   }
-  match.status='planned';match.legsA=0;match.legsB=0;match.setsA=0;match.setsB=0;match.boardNumber=null;match.winnerId=null;match.stats=null;match.liveData=null;delete match.completedAt;
+  match.status='planned';match.legsA=0;match.legsB=0;match.setsA=0;match.setsB=0;match.winnerId=null;match.stats=null;match.liveData=null;delete match.completedAt;
   saveState();render();
 }
 
@@ -3340,7 +3419,7 @@ function finalizeLiveMatch(winnerId) {
 
   const match=state.matches.find(m=>m.id===live.matchId);
   if(!match)return;
-  match.legsA=totalLegsA;match.legsB=totalLegsB;match.setsA=setsA;match.setsB=setsB;match.boardNumber=null;match.winnerId=winnerId;match.status='completed';match.completedAt=new Date().toISOString();
+  match.legsA=totalLegsA;match.legsB=totalLegsB;match.setsA=setsA;match.setsB=setsB;match.winnerId=winnerId;match.status='completed';match.completedAt=new Date().toISOString();
   match.stats={
     [live.playerA]:summarizeLivePlayer(live.playerA,live),
     [live.playerB]:summarizeLivePlayer(live.playerB,live)
@@ -3777,6 +3856,7 @@ function loadDemo() {
   state.settings.competitionName='Piątkowa Liga Darta';state.settings.format='league';
   ['Michał','Andrzej','Kamil','Piotr','Łukasz','Tomasz'].forEach(name=>state.players.push({id:uid('p'),name,group:'',createdAt:new Date().toISOString()}));
   state.matches=roundRobin(state.players.map(p=>p.id),null);
+  assignBoardsToMatches(state, state.matches);
   const samples=[[2,0],[2,1],[0,2],[1,2]];
   state.matches.slice(0,4).forEach((m,i)=>{m.legsA=samples[i][0];m.legsB=samples[i][1];m.status='completed';m.winnerId=m.legsA>m.legsB?m.playerA:m.playerB;m.completedAt=new Date(Date.now()-i*3600000).toISOString();m.stats={
     [m.playerA]:{totalScore:1350+i*30,totalDarts:75+i*3,average:54,h100:3+i,h140:1,h180:i===0?1:0,highOut:72+i*4,bestLeg:21+i},
@@ -3841,7 +3921,7 @@ async function installApp() {
 
 window.addEventListener('beforeinstallprompt',event=>{event.preventDefault();deferredInstallPrompt=event;updateInstallButton();});
 window.addEventListener('appinstalled',()=>{deferredInstallPrompt=null;toast('Aplikacja została zainstalowana');});
-if('serviceWorker' in navigator){window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js?v=1.7.0').catch(console.error));}
+if('serviceWorker' in navigator){window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js?v=1.7.1').catch(console.error));}
 
 if (progressCompetition()) saveState();
 render();

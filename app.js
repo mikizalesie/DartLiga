@@ -2,7 +2,7 @@
 
 const LEGACY_STORAGE_KEY = 'dartliga_pwa_state_v1';
 const STORAGE_KEY = 'dartliga_pwa_hub_v2';
-const APP_VERSION = '1.5.0';
+const APP_VERSION = '1.5.1';
 let route = 'home';
 let matchFilter = 'all';
 let tableGroup = 'all';
@@ -10,6 +10,7 @@ let competitionFilter = 'all';
 let deferredInstallPrompt = null;
 let newCompetitionPanelOpen = false;
 let trainingSetupType = null;
+let dartbotTimer = null;
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -268,20 +269,102 @@ function normalizeTrainingSession(value = {}) {
   };
 }
 
+
+function normalizeDartbotTrainingData(value = {}, settings = {}) {
+  const startScore = Math.max(2, Number(settings.startScore) || Number(value.startScore) || 501);
+  const playerA = value.playerA || uid('dartbot_player');
+  const playerB = value.playerB || uid('dartbot_bot');
+  const legacyVisits = Array.isArray(value.visits) ? value.visits : [];
+  const visits = legacyVisits.map((visit, index) => {
+    if (visit?.playerId) return visit;
+    const playerId = visit?.who === 'bot' ? playerB : playerA;
+    const remainingAfter = Number(visit?.remaining);
+    const score = Math.max(0, Number(visit?.score) || 0);
+    const bust = Boolean(visit?.bust);
+    const after = Number.isFinite(remainingAfter) ? remainingAfter : startScore;
+    const before = bust ? after : after + score;
+    return {
+      playerId,
+      score,
+      enteredScore: score,
+      darts: Math.max(1, Math.min(3, Number(visit?.darts) || 3)),
+      bust,
+      checkout: Boolean(visit?.checkout),
+      remainingBefore: before,
+      remainingAfter: after,
+      throws: Array.isArray(visit?.throws) ? visit.throws : [],
+      notation: visit?.notation || String(score),
+      leg: Math.max(1, Number(visit?.leg) || 1),
+      at: visit?.at || new Date().toISOString(),
+      targetAverage: Number(visit?.targetAverage) || null
+    };
+  });
+  const legs = {
+    [playerA]: Math.max(0, Number(value.legs?.[playerA] ?? value.playerLegs) || 0),
+    [playerB]: Math.max(0, Number(value.legs?.[playerB] ?? value.botLegs) || 0)
+  };
+  const completedLegs = Math.max(0, Number(value.completedLegs) || legs[playerA] + legs[playerB]);
+  const initialStarterId = [playerA, playerB].includes(value.initialStarterId) ? value.initialStarterId : playerA;
+  const legacyTurn = value.turn === 'bot' ? playerB : playerA;
+  const currentPlayerId = [playerA, playerB].includes(value.currentPlayerId) ? value.currentPlayerId : legacyTurn;
+  return {
+    ...value,
+    mode: 'dartbot-training',
+    playerA,
+    playerB,
+    startScore,
+    legsToWin: Math.max(1, Math.ceil((Number(settings.legsCount) || 5) / 2)),
+    doubleOut: true,
+    initialStarterId,
+    legStarterId: [playerA, playerB].includes(value.legStarterId) ? value.legStarterId : initialStarterId,
+    currentPlayerId,
+    remaining: {
+      [playerA]: Number(value.remaining?.[playerA]) >= 0 ? Number(value.remaining[playerA]) : Math.max(0, Number(value.playerRemaining) || startScore),
+      [playerB]: Number(value.remaining?.[playerB]) >= 0 ? Number(value.remaining[playerB]) : Math.max(0, Number(value.botRemaining) || startScore)
+    },
+    legs,
+    completedLegs,
+    legNumber: Math.max(1, Number(value.legNumber) || completedLegs + 1),
+    visits,
+    legRecords: Array.isArray(value.legRecords) ? value.legRecords : [],
+    undo: Array.isArray(value.undo) ? value.undo : [],
+    pendingDarts: Array.isArray(value.pendingDarts) ? value.pendingDarts : [],
+    pendingSegment: Number.isInteger(Number(value.pendingSegment)) && Number(value.pendingSegment) >= 1 && Number(value.pendingSegment) <= 20 ? Number(value.pendingSegment) : null,
+    pendingMultiplier: ['S','D','T'].includes(value.pendingMultiplier) ? value.pendingMultiplier : 'S',
+    botCheckoutDartsLeft: value.botCheckoutDartsLeft === null || value.botCheckoutDartsLeft === undefined ? null : (Number.isFinite(Number(value.botCheckoutDartsLeft)) ? Math.max(0, Number(value.botCheckoutDartsLeft)) : null),
+    botCheckoutPlan: Array.isArray(value.botCheckoutPlan) ? value.botCheckoutPlan : [],
+    botCheckoutStartedAt: Number(value.botCheckoutStartedAt) || null,
+    botTargetAverage: Number(value.botTargetAverage) || Number(settings.botAverage) || 50,
+    botThinking: false,
+    startedAt: value.startedAt || new Date().toISOString()
+  };
+}
+
 function normalizeTrainingLive(value) {
   if (!value || typeof value !== 'object') return null;
   const type = TRAINING_CATALOG.some(item=>item.id===value.type) ? value.type : 'bobs27';
+  const rawSettings = value.settings && typeof value.settings === 'object' ? value.settings : {};
+  const settings = type === 'dartbot' ? {
+    ...rawSettings,
+    legsCount: Math.max(5, Number(rawSettings.legsCount) || 5),
+    startScore: Math.max(2, Number(rawSettings.startScore) || 501),
+    botAverage: Math.max(20, Math.min(110, Number(rawSettings.botAverage) || 50)),
+    botAdvantagePct: Math.max(0, Math.min(50, Number(rawSettings.botAdvantagePct) || 10)),
+    checkoutThreshold: Math.max(2, Math.min(170, Number(rawSettings.checkoutThreshold) || 100)),
+    checkoutDarts: Math.max(3, Math.min(30, Number(rawSettings.checkoutDarts) || 9))
+  } : rawSettings;
   return {
     ...value,
     id: value.id || uid('training_live'),
     type,
     playerName: String(value.playerName || 'Zawodnik'),
-    settings: value.settings && typeof value.settings === 'object' ? value.settings : {},
-    data: value.data && typeof value.data === 'object' ? value.data : {},
+    settings,
+    data: type === 'dartbot'
+      ? normalizeDartbotTrainingData(value.data || {}, settings)
+      : (value.data && typeof value.data === 'object' ? value.data : {}),
     startedAt: value.startedAt || new Date().toISOString()
   };
 }
-
 function trainingMetric(session) {
   const summary = session?.summary || {};
   switch (session?.type) {
@@ -402,26 +485,34 @@ function isSingleScorer() {
   return route === 'singleScorer';
 }
 
-function scorerLive() {
-  return isSingleScorer() ? hub.singleLive : state.live;
-}
 
+function isDartbotScorer() {
+  return route === 'trainingRun' && hub.trainingLive?.type === 'dartbot';
+}
+function scorerLive() {
+  if (isSingleScorer()) return hub.singleLive;
+  if (isDartbotScorer()) return hub.trainingLive?.data || null;
+  return state.live;
+}
 function scorerPlayerName(id) {
   const live = scorerLive();
   if (isSingleScorer()) return live?.playerNames?.[id] || 'Gracz';
+  if (isDartbotScorer()) {
+    if (id === live?.playerA) return hub.trainingLive?.playerName || 'Zawodnik';
+    if (id === live?.playerB) return `Dartbot +${Number(hub.trainingLive?.settings?.botAdvantagePct) || 0}%`;
+    return 'Dartbot';
+  }
   return playerName(id);
 }
-
 function saveScorerState() {
-  if (isSingleScorer()) saveHub();
+  if (isSingleScorer() || isDartbotScorer()) saveHub();
   else saveState();
 }
-
 function scorerDoubleOut(live = scorerLive()) {
+  if (isDartbotScorer()) return true;
   if (live?.doubleOut !== undefined) return live.doubleOut !== false;
   return state.settings.doubleOut !== false;
 }
-
 function saveHub() {
   hub.version = APP_VERSION;
   hub.updatedAt = new Date().toISOString();
@@ -1231,13 +1322,21 @@ function renderTrainingSetup() {
   let options='';
   if (type==='checkout121') options=`<div class="field"><label>Wynik początkowy</label><select name="startTarget"><option value="61">61 — początkujący</option><option value="121" selected>121 — podstawowy</option></select></div><div class="field"><label>Limit lotek na wynik</label><select name="maxDarts"><option value="9" selected>9 lotek</option><option value="6">6 lotek</option></select></div><div class="field wide"><label>Poziomy bezpieczeństwa</label><div class="check-grid"><label><input type="checkbox" name="safe125" value="125"> 125</label><label><input type="checkbox" name="safe130" value="130"> 130</label><label><input type="checkbox" name="safe135" value="135"> 135</label></div><small class="field-help">Po osiągnięciu zaznaczonego poziomu nie spadniesz już poniżej niego.</small></div>`;
   if (type==='hundred') options=`<div class="field wide"><label>Wariant</label><select name="variant"><option value="t20">100 lotek na 20</option><option value="t19">100 lotek na 19</option><option value="bull">100 lotek na Bull</option><option value="switch">40 × 20, 30 × 19, 20 × 18, 10 × Bull</option></select></div>`;
-  if (type==='dartbot') options=`<div class="field"><label>Liczba legów sesji</label><input type="number" name="legsCount" min="5" max="25" value="5"></div><div class="field"><label>Średnia Dartbota</label><input type="number" name="botAverage" min="20" max="110" step="1" value="50"></div><div class="field"><label>Punkty startowe</label><select name="startScore"><option value="301">301</option><option value="501" selected>501</option><option value="701">701</option></select></div>`;
+  if (type==='dartbot') options=`
+    <div class="field"><label>Liczba legów sesji</label><input type="number" name="legsCount" min="5" max="25" value="5"></div>
+    <div class="field"><label>Punkty startowe</label><select name="startScore"><option value="301">301</option><option value="501" selected>501</option><option value="701">701</option></select></div>
+    <div class="field"><label>Średnia startowa Dartbota</label><input type="number" name="botAverage" min="20" max="110" step="1" value="50"><small class="field-help">Obowiązuje do chwili, gdy aplikacja policzy Twoją średnią.</small></div>
+    <div class="field"><label>Przewaga Dartbota nad Twoją średnią</label><div class="input-suffix"><input type="number" name="botAdvantagePct" min="0" max="50" step="1" value="10"><span>%</span></div><small class="field-help">Przy średniej 60 i przewadze 10% cel Dartbota będzie wynosił 60–66.</small></div>
+    <div class="field"><label>Od jakiego wyniku odliczać checkout</label><input type="number" name="checkoutThreshold" min="2" max="170" value="100"><small class="field-help">Po zejściu do tej wartości Dartbot rozpocznie plan zamknięcia lega.</small></div>
+    <div class="field"><label>Maksymalna liczba lotek na zamknięcie</label><select name="checkoutDarts"><option value="3">3 lotki</option><option value="6">6 lotek</option><option value="9" selected>9 lotek</option><option value="12">12 lotek</option><option value="15">15 lotek</option><option value="18">18 lotek</option></select></div>
+    <div class="wide note dartbot-config-note"><strong>Dynamiczny Dartbot</strong><br>Po każdej Twojej wizycie przeciwnik przelicza cel średniej. Po wejściu w strefę checkoutu realizuje plan zakończenia w ustawionym limicie lotek.</div>`;
   return `${pageHeader('Konfiguracja treningu', def.name, def.goal, '<button class="btn ghost" data-route="training">Wróć</button>')}<section class="card"><form id="trainingSetupForm" class="form-grid"><input type="hidden" name="type" value="${type}"><div class="field wide"><label>Nazwa zawodnika</label><input name="playerName" maxlength="50" value="${esc(profile)}" placeholder="np. Michał" required></div>${options}<div class="wide note"><strong>${esc(def.name)}</strong><br>${esc(def.description)}</div><div class="wide"><button class="btn primary" type="submit">Rozpocznij trening</button></div></form></section>`;
 }
 
 function renderTrainingRun() {
   const live=hub.trainingLive;
   if(!live){route='training';return renderTraining();}
+  if(live.type==='dartbot') return renderScorer();
   const def=trainingDefinition(live.type);
   const header=pageHeader('Trening w toku',def.name,`${def.goal} · ${esc(live.playerName)}`,`<button class="btn ghost" data-route="training">Zapisz i wyjdź</button><button class="btn danger" id="abandonTrainingRun">Usuń trening</button>`);
   let body='';
@@ -1246,11 +1345,9 @@ function renderTrainingRun() {
   if(live.type==='hundred') body=renderHundred(live);
   if(live.type==='jdc') body=renderJdc(live);
   if(live.type==='halveit') body=renderHalveIt(live);
-  if(live.type==='dartbot') body=renderDartbot(live);
   if(live.type==='session45') body=renderSession45(live);
   return `${header}<div class="training-run">${body}</div>`;
 }
-
 function trainingProgress(current,total,label='Etap') {
   const value=Math.min(100,Math.max(0,total?current/total*100:0));
   return `<div class="training-progress"><div><span>${label}</span><strong>${current}/${total}</strong></div><div class="training-progress-track"><i style="width:${value}%"></i></div></div>`;
@@ -1299,28 +1396,57 @@ function renderHalveIt(live) {
   return `<section class="card accent">${trainingProgress((data.index||0)+1,HALVE_IT_TARGETS.length,'Runda')}<div class="training-task"><div><span>Aktualny cel</span><strong>${esc(target.label)}</strong><small>${esc(target.help)} Masz 3 lotki.</small></div><div class="training-score"><span>Wynik</span><strong>${data.score||0}</strong><small>Połowienia: ${data.misses||0}</small></div></div><form id="halveForm" class="training-action-form"><div class="field"><label>Punkty zdobyte z wyznaczonego pola</label><input type="number" name="points" min="0" max="180" value="0" required></div><button class="btn primary" type="submit">Zapisz rundę</button></form><div class="note" style="margin-top:14px">Wpisz 0, gdy żadna z trzech lotek nie trafiła celu. Aplikacja automatycznie podzieli dotychczasowy wynik przez dwa.</div></section>`;
 }
 
-function renderDartbot(live) {
-  const data=live.data;
-  return `<section class="card accent">${trainingProgress((data.completedLegs||0),Number(live.settings.legsCount)||5,'Legi')}<div class="dartbot-board"><div class="dartbot-player ${data.turn==='player'?'active':''}"><span>${esc(live.playerName)}</span><strong>${data.playerRemaining}</strong><small>Legi ${data.playerLegs||0} · śr. ${fmt(data.playerDarts?data.playerScore/data.playerDarts*3:0)}</small></div><div class="dartbot-center"><span>Leg ${data.completedLegs+1}</span><strong>${data.playerLegs||0}:${data.botLegs||0}</strong><small>${data.turn==='player'?'Twój rzut':'Rzuca Dartbot'}</small></div><div class="dartbot-player ${data.turn==='bot'?'active':''}"><span>Dartbot ${live.settings.botAverage}</span><strong>${data.botRemaining}</strong><small>Legi ${data.botLegs||0} · śr. ${fmt(data.botDarts?data.botScore/data.botDarts*3:0)}</small></div></div><form id="dartbotForm" class="training-action-form"><div class="field"><label>Wynik Twojej wizyty</label><input type="number" name="score" min="0" max="180" value="60" required></div><div class="field"><label>Liczba użytych lotek</label><select name="darts"><option value="3">3</option><option value="2">2</option><option value="1">1</option></select></div><button class="btn primary" type="submit">Zapisz wizytę</button></form><div class="note" style="margin-top:14px">Pełny Double Out. Gdy wpisany wynik zamyka pozostałą liczbę, leg zostanie zapisany automatycznie. Dartbot odpowiada wizytą dopasowaną do ustawionej średniej.</div></section>`;
+function renderDartbot() {
+  return renderScorer();
 }
-
 function renderSession45(live) {
   const data=live.data, stage=SESSION_45_STAGES[data.index||0];
   return `<section class="card accent">${trainingProgress((data.index||0)+1,SESSION_45_STAGES.length,'Blok')}<div class="training-task"><div><span>${stage.minutes} minut</span><strong>${esc(stage.title)}</strong><small>${esc(stage.instruction)}</small></div><div class="training-score"><span>Wykonano</span><strong>${data.index||0}/5</strong><small>Łączny plan: 45 minut</small></div></div><form id="session45Form" class="training-action-form"><div class="field"><label>Wynik lub krótka obserwacja z bloku</label><input name="note" maxlength="160" placeholder="np. 42 pkt, D16 niestabilne, dobra koncentracja"></div>${data.index===SESSION_45_STAGES.length-1?'<div class="field"><label>Ocena całej sesji 1–10</label><input type="number" name="rating" min="1" max="10" value="7"></div>':''}<button class="btn primary" type="submit">${data.index===SESSION_45_STAGES.length-1?'Zakończ i zapisz sesję':'Zapisz blok i pokaż następny'}</button></form></section>`;
 }
 
+
+function dartbotAverageRange(training = hub.trainingLive) {
+  const data = training?.data;
+  if (!training || training.type !== 'dartbot' || !data) return {low:0, high:0, source:'brak danych'};
+  const playerStats = livePlayerStats(data.playerA, data);
+  const base = Math.max(1, Number(training.settings.botAverage) || 50);
+  const low = playerStats.darts ? Math.max(1, playerStats.average) : base;
+  const advantage = Math.max(0, Number(training.settings.botAdvantagePct) || 0);
+  const high = Math.min(120, low * (1 + advantage / 100));
+  return {low, high:Math.max(low, high), source:playerStats.darts ? 'Twoja aktualna średnia' : 'średnia startowa'};
+}
+
+function renderDartbotScorerInfo(live) {
+  const training = hub.trainingLive;
+  const range = dartbotAverageRange(training);
+  const threshold = Number(training?.settings?.checkoutThreshold) || 100;
+  const limit = Number(training?.settings?.checkoutDarts) || 9;
+  const left = live.botCheckoutDartsLeft === null || live.botCheckoutDartsLeft === undefined ? null : (Number.isFinite(Number(live.botCheckoutDartsLeft)) ? Number(live.botCheckoutDartsLeft) : null);
+  const windowText = left === null
+    ? `Strefa checkoutu: ${threshold} lub mniej · limit ${limit} lotek`
+    : `Checkout aktywny: pozostało maks. ${left} ${left===1?'lotka':'lotek'}`;
+  return `<div class="dartbot-dynamic-bar"><div><span>Dynamiczny cel średniej</span><strong>${fmt(range.low)}–${fmt(range.high)}</strong><small>${esc(range.source)} + ${Number(training?.settings?.botAdvantagePct)||0}%</small></div><div><span>Plan zakończenia</span><strong>${left===null?`≤ ${threshold}`:`${left} lotek`}</strong><small>${windowText}</small></div><div><span>Postęp sesji</span><strong>${live.completedLegs||0}/${Number(training?.settings?.legsCount)||5}</strong><small>rozegrane legi</small></div></div>`;
+}
+
+function renderDartbotTurnHint(live) {
+  const range = dartbotAverageRange(hub.trainingLive);
+  const left = live.botCheckoutDartsLeft === null || live.botCheckoutDartsLeft === undefined ? null : (Number.isFinite(Number(live.botCheckoutDartsLeft)) ? Number(live.botCheckoutDartsLeft) : null);
+  return `<div class="checkout-hint dartbot-turn-hint" aria-live="polite"><span>Dartbot rzuca</span><strong>${live.botThinking?'Przygotowuje wizytę…':'Automatyczny rzut'}</strong><small>Cel ${fmt(range.low)}–${fmt(range.high)}${left===null?'':` · checkout do ${left} lotek`}</small></div>`;
+}
+
 function renderScorer() {
   const standalone = isSingleScorer();
+  const dartbotTraining = isDartbotScorer();
   const live = scorerLive();
   if (!live) {
-    route = standalone ? 'single' : 'matches';
-    return standalone ? renderSingleMatch() : renderMatches();
+    route = standalone ? 'single' : (dartbotTraining ? 'training' : 'matches');
+    return standalone ? renderSingleMatch() : (dartbotTraining ? renderTraining() : renderMatches());
   }
-  const match = standalone ? null : state.matches.find(m=>m.id===live.matchId);
-  if (!standalone && !match) return `<section class="card">${empty('Nie znaleziono meczu','Wróć do terminarza.')}</section>`;
-  const statsA = livePlayerStats(live.playerA);
-  const statsB = livePlayerStats(live.playerB);
-  const visits = live.visits.slice().reverse();
+  const match = standalone || dartbotTraining ? null : state.matches.find(m=>m.id===live.matchId);
+  if (!standalone && !dartbotTraining && !match) return `<section class="card">${empty('Nie znaleziono meczu','Wróć do terminarza.')}</section>`;
+  const statsA = livePlayerStats(live.playerA, live);
+  const statsB = livePlayerStats(live.playerB, live);
+  const visits = (live.visits || []).slice().reverse();
   const evaluation = evaluatePendingVisit(live);
   const pending = live.pendingDarts || [];
   const selectedSegment =
@@ -1329,30 +1455,37 @@ function renderScorer() {
     Number(live.pendingSegment) <= 20
       ? Number(live.pendingSegment)
       : null;
-  const locked = evaluation.bust || evaluation.checkout || pending.length >= 3;
-  const canSubmit = evaluation.bust || evaluation.checkout || pending.length === 3;
+  const playerCanThrow = !dartbotTraining || (live.currentPlayerId === live.playerA && !live.botThinking);
+  const locked = evaluation.bust || evaluation.checkout || pending.length >= 3 || !playerCanThrow;
+  const canSubmit = playerCanThrow && (evaluation.bust || evaluation.checkout || pending.length === 3);
   const submitLabel = evaluation.checkout ? 'Zatwierdź checkout' : (evaluation.bust ? 'Zatwierdź BUST' : 'Zatwierdź wizytę');
-  const backRoute = standalone ? 'single' : 'matches';
+  const backRoute = standalone ? 'single' : (dartbotTraining ? 'training' : 'matches');
   const contextLabel = standalone
     ? `${live.doubleOut !== false ? 'Double Out' : 'Straight Out'} · pojedynczy mecz`
-    : (match.bracketRound ? knockoutStageLabel(match.stageKey) : (match.group ? `Grupa ${match.group}` : 'mecz ligowy'));
+    : dartbotTraining
+      ? `trening · ${live.completedLegs||0}/${Number(hub.trainingLive?.settings?.legsCount)||5} legów · pełny Double Out`
+      : (match.bracketRound ? knockoutStageLabel(match.stageKey) : (match.group ? `Grupa ${match.group}` : 'mecz ligowy'));
+  const headerActions = dartbotTraining
+    ? `<button class="btn ghost" data-route="training">Zapisz i wyjdź</button><button class="btn danger" id="abandonTrainingRun">Usuń trening</button>`
+    : `<button class="btn ghost" data-route="${backRoute}">Zapisz i wyjdź</button>`;
   return `
     ${pageHeader(
-      'Licznik X01',
+      dartbotTraining ? 'Trening meczowy' : 'Licznik X01',
       `${esc(scorerPlayerName(live.playerA))} vs ${esc(scorerPlayerName(live.playerB))}`,
-      `${live.startScore || (standalone ? 501 : matchStartScore(match))} · pierwszy do ${live.legsToWin || (standalone ? 1 : matchLegsToWin(match))} wygranych legów · ${contextLabel}`,
-      `<button class="btn ghost" data-route="${backRoute}">Zapisz i wyjdź</button>`
+      `${live.startScore || (standalone ? 501 : (dartbotTraining ? Number(hub.trainingLive?.settings?.startScore)||501 : matchStartScore(match)))} · ${dartbotTraining ? `sesja ${Number(hub.trainingLive?.settings?.legsCount)||5} legów` : `pierwszy do ${live.legsToWin || (standalone ? 1 : matchLegsToWin(match))} wygranych legów`} · ${contextLabel}`,
+      headerActions
     )}
-    <div class="scorer">
+    <div class="scorer ${dartbotTraining?'dartbot-scorer':''}">
+      ${dartbotTraining ? renderDartbotScorerInfo(live) : ''}
       <div class="scoreboard">
         ${scorePlayer(live.playerA, statsA)}
         <div class="versus"><div><div class="leg-label">Legi</div><div class="legs-big">${live.legs[live.playerA]} : ${live.legs[live.playerB]}</div><div class="muted">Leg ${live.legNumber}</div></div></div>
         ${scorePlayer(live.playerB, statsB)}
       </div>
-      ${renderCheckoutHint(live, evaluation)}
+      ${dartbotTraining && !playerCanThrow ? renderDartbotTurnHint(live) : renderCheckoutHint(live, evaluation)}
       <div class="entry-panel">
-        <section class="card accent">
-          <div class="section-head"><div><h2>Wynik wizyty</h2><div class="muted">Rzuca: <strong class="green">${esc(scorerPlayerName(live.currentPlayerId))}</strong></div></div><button class="btn small ghost" id="toggleStarter" ${live.visits.some(v=>v.leg===live.legNumber)?'disabled':''}>Zmień rozpoczynającego</button></div>
+        <section class="card accent ${!playerCanThrow?'scorer-entry-disabled':''}">
+          <div class="section-head"><div><h2>${dartbotTraining?'Wynik Twojej wizyty':'Wynik wizyty'}</h2><div class="muted">${playerCanThrow?'Rzuca':'Oczekiwanie'}: <strong class="green">${esc(scorerPlayerName(live.currentPlayerId))}</strong></div></div><button class="btn small ghost" id="toggleStarter" ${live.visits.some(v=>v.leg===live.legNumber)||live.botThinking?'disabled':''}>Zmień rozpoczynającego</button></div>
           <form id="scoreForm">
             <div class="visit-builder">
               <div class="dart-slots">${[0,1,2].map(index=>{
@@ -1366,92 +1499,36 @@ function renderScorer() {
               </div>
             </div>
 
-            <div class="dart-step-head">
-              <span>1</span>
-              <div>
-                <strong>Wybierz numer pola</strong>
-                <small>Najpierw kliknij liczbę od 1 do 20.</small>
-              </div>
-            </div>
-
+            <div class="dart-step-head"><span>1</span><div><strong>Wybierz numer pola</strong><small>Najpierw kliknij liczbę od 1 do 20.</small></div></div>
             <div class="dart-number-grid" aria-label="Wybierz numer pola">
-              ${Array.from({length:20},(_,i)=>i+1).map(value=>`
-                <button
-                  type="button"
-                  class="dart-number ${selectedSegment===value?'selected':''}"
-                  data-segment="${value}"
-                  ${locked?'disabled':''}
-                >
-                  ${value}
-                </button>
-              `).join('')}
+              ${Array.from({length:20},(_,i)=>i+1).map(value=>`<button type="button" class="dart-number ${selectedSegment===value?'selected':''}" data-segment="${value}" ${locked?'disabled':''}>${value}</button>`).join('')}
             </div>
-
-            <div class="dart-step-head second-step">
-              <span>2</span>
-              <div>
-                <strong>Wybierz rodzaj trafienia</strong>
-                <small>
-                  ${selectedSegment
-                    ? `Wybrane pole: ${selectedSegment}`
-                    : 'Najpierw wybierz numer pola.'}
-                </small>
-              </div>
-            </div>
-
+            <div class="dart-step-head second-step"><span>2</span><div><strong>Wybierz rodzaj trafienia</strong><small>${selectedSegment?`Wybrane pole: ${selectedSegment}`:'Najpierw wybierz numer pola.'}</small></div></div>
             <div class="multiplier-picker" aria-label="Wybierz rodzaj trafienia">
-              ${[
-                ['S','Singiel',1],
-                ['D','Double',2],
-                ['T','Triple',3]
-              ].map(([code,label,multiplier])=>`
-                <button
-                  type="button"
-                  class="multiplier-btn"
-                  data-multiplier="${code}"
-                  ${locked||!selectedSegment?'disabled':''}
-                >
-                  <b>${code}</b>
-                  <span>
-                    ${selectedSegment
-                      ? `${label}: ${selectedSegment * multiplier} pkt`
-                      : label}
-                  </span>
-                </button>
-              `).join('')}
+              ${[['S','Singiel',1],['D','Double',2],['T','Triple',3]].map(([code,label,multiplier])=>`<button type="button" class="multiplier-btn" data-multiplier="${code}" ${locked||!selectedSegment?'disabled':''}><b>${code}</b><span>${selectedSegment?`${label}: ${selectedSegment*multiplier} pkt`:label}</span></button>`).join('')}
             </div>
-
             <div class="dart-special-label">Bull lub pudło</div>
-
             <div class="dart-special-grid">
-              <button type="button" class="dart-special" data-special="S25" ${locked?'disabled':''}>
-                <b>25</b><span>Outer Bull</span>
-              </button>
-              <button type="button" class="dart-special" data-special="DBULL" ${locked?'disabled':''}>
-                <b>50</b><span>Bull</span>
-              </button>
-              <button type="button" class="dart-special miss" data-special="MISS" ${locked?'disabled':''}>
-                <b>0</b><span>Pudło</span>
-              </button>
+              <button type="button" class="dart-special" data-special="S25" ${locked?'disabled':''}><b>25</b><span>Outer Bull</span></button>
+              <button type="button" class="dart-special" data-special="DBULL" ${locked?'disabled':''}><b>50</b><span>Bull</span></button>
+              <button type="button" class="dart-special miss" data-special="MISS" ${locked?'disabled':''}><b>0</b><span>Pudło</span></button>
             </div>
-
             <div class="dart-actions">
               <button class="btn primary" type="submit" ${canSubmit?'':'disabled'}>${submitLabel}</button>
-              <button class="btn ghost" type="button" id="undoDart" ${(pending.length||selectedSegment)?'':'disabled'}>Cofnij lotkę</button>
-              <button class="btn ghost" type="button" id="clearDarts" ${(pending.length||selectedSegment)?'':'disabled'}>Wyczyść wizytę</button>
+              <button class="btn ghost" type="button" id="undoDart" ${(playerCanThrow&&(pending.length||selectedSegment))?'':'disabled'}>Cofnij lotkę</button>
+              <button class="btn ghost" type="button" id="clearDarts" ${(playerCanThrow&&(pending.length||selectedSegment))?'':'disabled'}>Wyczyść wizytę</button>
               <button class="btn ghost" type="button" id="undoVisit" ${live.undo.length?'':'disabled'}>Cofnij ostatnią wizytę</button>
             </div>
           </form>
-          <div class="note" style="margin-top:14px">Najpierw wybierz numer pola, a następnie Singiel, Double albo Triple. Trzecia lotka automatycznie zapisuje wizytę, odejmuje punkty i przełącza zawodnika. Checkout i BUST również zapisują się automatycznie. Przed trzecią lotką możesz cofnąć lotkę albo wyczyścić wizytę.</div>
+          <div class="note" style="margin-top:14px">${dartbotTraining?'Wprowadź swoje lotki dokładnie tak jak w zwykłym meczu. Po trzeciej lotce wizyta zapisze się automatycznie, a Dartbot odpowie własnym rzutem i dopasuje poziom do Twojej aktualnej średniej.':'Najpierw wybierz numer pola, a następnie Singiel, Double albo Triple. Trzecia lotka automatycznie zapisuje wizytę, odejmuje punkty i przełącza zawodnika. Checkout i BUST również zapisują się automatycznie. Przed trzecią lotką możesz cofnąć lotkę albo wyczyścić wizytę.'}</div>
         </section>
         <section class="card">
           <div class="section-head"><h2>Historia wizyt</h2><span class="badge">${live.visits.length}</span></div>
-          <div class="visit-history">${visits.length ? visits.map(v=>`<div class="visit"><div class="visit-player"><span>${esc(scorerPlayerName(v.playerId))}${v.checkout?' · checkout':''}${v.bust?' · BUST':''}</span>${visitNotation(v)?`<small>${esc(visitNotation(v))}</small>`:''}</div><span class="vscore ${v.bust?'red':''}">${v.bust?'0':v.score}</span><span class="vrem">zostało ${v.remainingAfter}</span></div>`).join('') : empty('Pierwszy rzut','Wybierz trzy lotki, aby zapisać pierwszą wizytę.')}</div>
+          <div class="visit-history">${visits.length ? visits.map(v=>`<div class="visit ${v.playerId===live.playerB&&dartbotTraining?'bot-visit':''}"><div class="visit-player"><span>${esc(scorerPlayerName(v.playerId))}${v.checkout?' · checkout':''}${v.bust?' · BUST':''}</span>${visitNotation(v)?`<small>${esc(visitNotation(v))}${v.targetAverage?` · cel śr. ${fmt(v.targetAverage)}`:''}</small>`:''}</div><span class="vscore ${v.bust?'red':''}">${v.bust?'0':v.score}</span><span class="vrem">zostało ${v.remainingAfter}</span></div>`).join('') : empty('Pierwszy rzut','Wybierz trzy lotki, aby zapisać pierwszą wizytę.')}</div>
         </section>
       </div>
     </div>`;
 }
-
 function scorePlayer(playerId, stats) {
   const live = scorerLive();
   return `<div class="score-player ${live.currentPlayerId===playerId?'active':''}"><div class="score-player-name">${esc(scorerPlayerName(playerId))}</div><div class="remaining">${live.remaining[playerId]}</div><div class="score-stats"><div><b>${fmt(stats.average)}</b><span>średnia</span></div><div><b>${stats.darts}</b><span>lotki</span></div><div><b>${stats.last ?? '—'}</b><span>ostatnia</span></div></div></div>`;
@@ -1480,7 +1557,6 @@ function bindCurrentPage() {
   $('#jdcShanghaiForm')?.addEventListener('submit',submitJdcShanghai);
   $$('.jdc-double').forEach(b=>b.addEventListener('click',()=>submitJdcDouble(b.dataset.hit==='1')));
   $('#halveForm')?.addEventListener('submit',submitHalveRound);
-  $('#dartbotForm')?.addEventListener('submit',submitDartbotVisit);
   $('#session45Form')?.addEventListener('submit',submitSession45Stage);
   $('#singleMatchForm')?.addEventListener('submit', createSingleMatch);
   $('#resumeSingleMatch')?.addEventListener('click', resumeSingleMatch);
@@ -1522,6 +1598,7 @@ function bindCurrentPage() {
   $('#resetAll')?.addEventListener('click', resetAll);
   $('#installBtnPage')?.addEventListener('click', installApp);
   $('#installBtn')?.addEventListener('click', installApp);
+  if (isDartbotScorer()) maybeQueueDartbotTurn();
 }
 
 function updateNewCompetitionFields() {
@@ -2573,12 +2650,14 @@ function clearPendingDarts() {
 function submitScore(event) {
   event.preventDefault();
   const live=scorerLive();if(!live)return;
+  const dartbotTraining=isDartbotScorer();
+  if(dartbotTraining && live.currentPlayerId!==live.playerA)return;
   live.pendingDarts=Array.isArray(live.pendingDarts)?live.pendingDarts:[];
   if(!live.pendingDarts.length)return toast('Wybierz co najmniej jedną lotkę');
   const evaluation=evaluatePendingVisit(live);
   if(!evaluation.bust&&!evaluation.checkout&&live.pendingDarts.length<3)return toast('Dodaj trzecią lotkę albo wybierz Pudło');
   const pid=live.currentPlayerId;
-  if(evaluation.checkout && live.legs[pid]+1>=Number(live.legsToWin || 2) && !confirm(`Checkout ${evaluation.remainingBefore}. Zakończyć mecz zwycięstwem ${scorerPlayerName(pid)}?`)) return;
+  if(!dartbotTraining && evaluation.checkout && live.legs[pid]+1>=Number(live.legsToWin || 2) && !confirm(`Checkout ${evaluation.remainingBefore}. Zakończyć mecz zwycięstwem ${scorerPlayerName(pid)}?`)) return;
   live.undo.push(snapshotLive());
   if(live.undo.length>50)live.undo.shift();
   const throws=clone(live.pendingDarts);
@@ -2605,6 +2684,7 @@ function submitScore(event) {
     const winnerDarts=live.visits.filter(v=>v.leg===live.legNumber&&v.playerId===pid).reduce((sum,v)=>sum+v.darts,0);
     live.legRecords.push({leg:live.legNumber,winnerId:pid,darts:winnerDarts,checkout:evaluation.remainingBefore});
     live.legs[pid]++;
+    if(dartbotTraining)return advanceDartbotTrainingLeg(pid);
     if(live.legs[pid]>=Number(live.legsToWin || 2)){
       finalizeLiveMatch(pid);return;
     }
@@ -2615,15 +2695,18 @@ function submitScore(event) {
     live.legStarterId=live.legNumber%2===1?live.initialStarterId:other;
     live.currentPlayerId=live.legStarterId;
     toast(`Leg dla ${scorerPlayerName(pid)}`);
+  }else if(dartbotTraining){
+    live.currentPlayerId=live.playerB;
+    saveHub();render();maybeQueueDartbotTurn();return;
   }else{
     live.currentPlayerId=pid===live.playerA?live.playerB:live.playerA;
   }
   saveScorerState();render();
 }
-
 function finalizeLiveMatch(winnerId) {
   const live=scorerLive();
   if(!live)return;
+  if(isDartbotScorer())return finishDartbotTraining(hub.trainingLive);
 
   if(isSingleScorer()){
     const statsA=summarizeLivePlayer(live.playerA,live);
@@ -2685,25 +2768,28 @@ function summarizeLivePlayer(pid, live=scorerLive()) {
 
 function undoVisit() {
   const live=scorerLive();if(!live?.undo.length)return;
+  if(dartbotTimer){clearTimeout(dartbotTimer);dartbotTimer=null;}
   const stack=live.undo.slice();const previous=stack.pop();
   if(isSingleScorer()) hub.singleLive={...previous,undo:stack};
+  else if(isDartbotScorer()) hub.trainingLive.data={...previous,undo:stack,botThinking:false};
   else state.live={...previous,undo:stack};
   saveScorerState();render();toast('Cofnięto ostatnią wizytę');
 }
-
 function toggleLegStarter() {
   const live=scorerLive();if(!live)return;
   if(live.visits.some(v=>v.leg===live.legNumber))return;
+  if(dartbotTimer){clearTimeout(dartbotTimer);dartbotTimer=null;}
+  live.botThinking=false;
   live.legStarterId=live.legStarterId===live.playerA?live.playerB:live.playerA;
   live.currentPlayerId=live.legStarterId;
   if(live.legNumber===1)live.initialStarterId=live.legStarterId;
   saveScorerState();render();
+  if(isDartbotScorer())maybeQueueDartbotTurn();
 }
-
 function livePlayerStats(pid, live=scorerLive()) {
   const visits=(live?.visits || []).filter(v=>v.playerId===pid);
   const total=visits.reduce((s,v)=>s+v.score,0),darts=visits.reduce((s,v)=>s+v.darts,0);
-  return {average:darts?total/darts*3:0,darts,last:visits.length?(visits.at(-1).bust?'BUST':visits.at(-1).score):null};
+  return {average:darts?total/darts*3:0,darts,total,last:visits.length?(visits.at(-1).bust?'BUST':visits.at(-1).score):null};
 }
 
 function computeStandings(group='all') {
@@ -2743,7 +2829,7 @@ function initialTrainingData(type, settings={}) {
   if(type==='hundred') return {segments:hundredSegments(settings.variant),segmentIndex:0,segmentDarts:0,totalDarts:0,points:0,singles:0,doubles:0,triples:0,misses:0,rounds:[]};
   if(type==='jdc') return {sequence:jdcSequence(),index:0,score:0,shanghais:0,doublesHit:0,rounds:[]};
   if(type==='halveit') return {index:0,score:0,misses:0,rounds:[]};
-  if(type==='dartbot') {const start=Number(settings.startScore)||501;return {playerRemaining:start,botRemaining:start,playerLegs:0,botLegs:0,completedLegs:0,legNumber:1,turn:'player',playerScore:0,playerDarts:0,botScore:0,botDarts:0,visits:[]};}
+  if(type==='dartbot') return normalizeDartbotTrainingData({},settings);
   return {index:0,notes:[],rating:null};
 }
 
@@ -2762,23 +2848,30 @@ function startTrainingSession(event) {
   }
   if(type==='hundred')settings.variant=String(form.get('variant')||'t20');
   if(type==='dartbot'){
-    settings.legsCount=Math.max(5,Number(form.get('legsCount'))||5);
+    settings.legsCount=Math.max(5,Math.min(25,Number(form.get('legsCount'))||5));
     settings.botAverage=Math.max(20,Math.min(110,Number(form.get('botAverage'))||50));
-    settings.startScore=Number(form.get('startScore'))||501;
+    settings.botAdvantagePct=Math.max(0,Math.min(50,Number(form.get('botAdvantagePct'))||0));
+    settings.startScore=Math.max(2,Number(form.get('startScore'))||501);
+    settings.checkoutThreshold=Math.max(2,Math.min(170,Number(form.get('checkoutThreshold'))||100));
+    settings.checkoutDarts=Math.max(3,Math.min(30,Number(form.get('checkoutDarts'))||9));
+    if(settings.checkoutDarts===3 && settings.checkoutThreshold>158)return toast('Przy limicie 3 lotek ustaw próg checkoutu maksymalnie na 158');
   }
   hub.trainingProfileName=playerName;
   hub.trainingLive={id:uid('training'),type,playerName,settings,data:initialTrainingData(type,settings),startedAt:new Date().toISOString()};
   saveHub();route='trainingRun';render();toast('Trening rozpoczęty');
 }
 
-function resumeTraining(){if(!hub.trainingLive)return;route='trainingRun';render();}
-
+function resumeTraining(){
+  if(!hub.trainingLive)return;
+  route='trainingRun';
+  render();
+}
 function abandonTraining(){
   if(!hub.trainingLive)return;
   if(!confirm('Usunąć rozpoczęty trening bez zapisywania wyniku?'))return;
+  if(dartbotTimer){clearTimeout(dartbotTimer);dartbotTimer=null;}
   hub.trainingLive=null;saveHub();route='training';render();toast('Rozpoczęty trening usunięty');
 }
-
 function repeatTraining(id){
   const session=(hub.trainingSessions||[]).find(item=>item.id===id);if(!session)return;
   trainingSetupType=session.type;hub.trainingProfileName=session.playerName||hub.trainingProfileName;route='trainingSetup';render();
@@ -2872,39 +2965,203 @@ function normalRandom(mean,sd){
   return mean+Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v)*sd;
 }
 
-function newDartbotLeg(data,settings){
-  data.completedLegs++;data.legNumber++;data.playerRemaining=Number(settings.startScore)||501;data.botRemaining=Number(settings.startScore)||501;
-  data.turn=data.completedLegs%2===0?'player':'bot';
-  if(data.completedLegs>=(Number(settings.legsCount)||5))return true;
-  if(data.turn==='bot')setTimeout(()=>dartbotTurn(),50);
-  return false;
+const BOT_VISIT_ROUTE_CACHE = new Map();
+const BOT_CHECKOUT_ROUTE_CACHE = new Map();
+
+function botScoringDarts(){
+  return [
+    ...Array.from({length:20},(_,i)=>dartFromParts(20-i,'T')),
+    ...Array.from({length:20},(_,i)=>dartFromParts(20-i,'S')),
+    ...Array.from({length:20},(_,i)=>dartFromParts(20-i,'D')),
+    specialDart('S25'),specialDart('DBULL'),specialDart('MISS')
+  ];
+}
+
+function botRoutePenalty(route,score){
+  const target=score/3;
+  return route.reduce((sum,dart)=>sum+(dart.value===0?120:Math.pow(dart.value-target,2))+(dart.multiplier==='D'?4:0),0);
+}
+
+function botRouteForScore(score){
+  const value=Math.max(0,Math.min(180,Math.round(Number(score)||0)));
+  if(BOT_VISIT_ROUTE_CACHE.has(value))return clone(BOT_VISIT_ROUTE_CACHE.get(value));
+  const darts=botScoringDarts(),byValue=new Map();
+  darts.forEach(dart=>{const list=byValue.get(dart.value)||[];list.push(dart);byValue.set(dart.value,list);});
+  let best=null,bestPenalty=Infinity;
+  for(const first of darts){
+    for(const second of darts){
+      const needed=value-first.value-second.value;
+      const thirds=byValue.get(needed)||[];
+      for(const third of thirds){
+        const route=[first,second,third],penalty=botRoutePenalty(route,value);
+        if(penalty<bestPenalty){best=route;bestPenalty=penalty;}
+      }
+    }
+  }
+  const result=best||[specialDart('MISS'),specialDart('MISS'),specialDart('MISS')];
+  BOT_VISIT_ROUTE_CACHE.set(value,result);return clone(result);
+}
+
+function nearestBotVisit(desired,maxScore,before){
+  const target=Math.max(0,Math.min(180,Math.round(desired)));
+  const upper=Math.max(0,Math.min(180,Math.floor(maxScore)));
+  for(let radius=0;radius<=180;radius++){
+    for(const score of [target-radius,target+radius]){
+      if(score<0||score>upper)continue;
+      if(before-score===1)continue;
+      const route=botRouteForScore(score);
+      if(route.reduce((sum,d)=>sum+d.value,0)===score)return {score,throws:route};
+    }
+  }
+  return {score:0,throws:botRouteForScore(0)};
+}
+
+function extendedCheckoutRoute(score,maxDarts){
+  const total=Math.max(2,Math.round(Number(score)||0));
+  const limit=Math.max(1,Math.min(30,Math.round(Number(maxDarts)||3)));
+  const key=`${total}:${limit}`;
+  if(BOT_CHECKOUT_ROUTE_CACHE.has(key))return clone(BOT_CHECKOUT_ROUTE_CACHE.get(key));
+  const setup=checkoutCandidateDarts().filter(d=>d.value>0);
+  const finish=finishingDarts(true);
+  const memo=new Map();
+  function solve(remaining,dartsLeft){
+    const memoKey=`${remaining}:${dartsLeft}`;
+    if(memo.has(memoKey))return memo.get(memoKey);
+    if(dartsLeft===1){
+      const last=finish.find(d=>d.value===remaining)||null;
+      const result=last?[last]:null;memo.set(memoKey,result);return result;
+    }
+    if(remaining<2||remaining>60*dartsLeft){memo.set(memoKey,null);return null;}
+    for(const dart of setup){
+      const after=remaining-dart.value;
+      if(after<2||after===1)continue;
+      const rest=solve(after,dartsLeft-1);
+      if(rest){const result=[dart,...rest];memo.set(memoKey,result);return result;}
+    }
+    memo.set(memoKey,null);return null;
+  }
+  for(let length=1;length<=limit;length++){
+    const result=solve(total,length);
+    if(result){BOT_CHECKOUT_ROUTE_CACHE.set(key,result);return clone(result);}
+  }
+  BOT_CHECKOUT_ROUTE_CACHE.set(key,null);return null;
+}
+
+function buildBotCheckoutPlan(training){
+  const data=training.data,before=data.remaining[data.playerB];
+  const limit=Math.max(3,Number(training.settings.checkoutDarts)||9);
+  const shortest=extendedCheckoutRoute(before,limit) || extendedCheckoutRoute(before,Math.max(6,limit));
+  if(!shortest)return null;
+  const range=dartbotAverageRange(training),target=(range.low+range.high)/2;
+  const strength=Math.max(0,Math.min(1,(target-25)/75));
+  const capacity=Math.max(0,limit-shortest.length);
+  const misses=Math.max(0,Math.min(capacity,Math.round(capacity*(1-strength)*(0.45+Math.random()*.5))));
+  const plan=[...Array.from({length:misses},()=>specialDart('MISS')),...shortest];
+  data.botCheckoutPlan=clone(plan);
+  data.botCheckoutDartsLeft=limit;
+  data.botCheckoutStartedAt=before;
+  return plan;
+}
+
+function currentBotTargetAverage(training){
+  const data=training.data,range=dartbotAverageRange(training);
+  const sampled=range.low+Math.random()*Math.max(0,range.high-range.low);
+  data.botTargetAverage=sampled;
+  return sampled;
+}
+
+function maybeQueueDartbotTurn(delay=650){
+  const training=hub.trainingLive;
+  if(route!=='trainingRun'||training?.type!=='dartbot')return;
+  const data=training.data;
+  if(!data||data.currentPlayerId!==data.playerB||dartbotTimer)return;
+  data.botThinking=true;saveHub();
+  dartbotTimer=setTimeout(()=>{
+    dartbotTimer=null;
+    const current=hub.trainingLive;
+    if(current?.type!=='dartbot'||current.data.currentPlayerId!==current.data.playerB)return;
+    current.data.botThinking=false;
+    dartbotTurn();
+  },delay);
+}
+
+function advanceDartbotTrainingLeg(winnerId){
+  const training=hub.trainingLive;if(training?.type!=='dartbot')return;
+  const data=training.data;
+  data.completedLegs=(data.legs[data.playerA]||0)+(data.legs[data.playerB]||0);
+  if(data.completedLegs>=Number(training.settings.legsCount||5))return finishDartbotTraining(training);
+  data.legNumber=data.completedLegs+1;
+  data.remaining[data.playerA]=Number(training.settings.startScore)||501;
+  data.remaining[data.playerB]=Number(training.settings.startScore)||501;
+  const other=data.initialStarterId===data.playerA?data.playerB:data.playerA;
+  data.legStarterId=data.legNumber%2===1?data.initialStarterId:other;
+  data.currentPlayerId=data.legStarterId;
+  data.pendingDarts=[];data.pendingSegment=null;data.botCheckoutPlan=[];data.botCheckoutDartsLeft=null;data.botCheckoutStartedAt=null;data.botThinking=false;
+  saveHub();render();toast(`Leg dla ${scorerPlayerName(winnerId)}`);maybeQueueDartbotTurn();
 }
 
 function finishDartbotTraining(live){
-  const d=live.data;completeTraining({playerLegs:d.playerLegs,botLegs:d.botLegs,playerAverage:d.playerDarts?d.playerScore/d.playerDarts*3:0,botAverage:d.botDarts?d.botScore/d.botDarts*3:0,totalLegs:d.completedLegs,visits:d.visits.length});
-}
-
-function submitDartbotVisit(event){
-  event.preventDefault();const live=hub.trainingLive;if(live?.type!=='dartbot')return;const data=live.data;if(data.turn!=='player')return;
-  const form=new FormData(event.currentTarget),score=Math.max(0,Math.min(180,Number(form.get('score'))||0)),darts=Math.max(1,Math.min(3,Number(form.get('darts'))||3));
-  const before=data.playerRemaining,after=before-score,bust=score>before||after===1,checkout=after===0;
-  const counted=bust?0:score;data.playerScore+=counted;data.playerDarts+=darts;data.visits.push({who:'player',score:counted,bust,checkout,remaining:bust?before:after,darts});
-  if(checkout){data.playerLegs++;if(newDartbotLeg(data,live.settings))return finishDartbotTraining(live);saveHub();render();return;}
-  if(!bust)data.playerRemaining=after;data.turn='bot';saveHub();render();setTimeout(()=>dartbotTurn(),250);
+  if(dartbotTimer){clearTimeout(dartbotTimer);dartbotTimer=null;}
+  const d=live.data,playerStats=summarizeLivePlayer(d.playerA,d),botStats=summarizeLivePlayer(d.playerB,d);
+  completeTraining({
+    playerLegs:d.legs[d.playerA]||0,
+    botLegs:d.legs[d.playerB]||0,
+    playerAverage:playerStats.average,
+    botAverage:botStats.average,
+    totalLegs:d.completedLegs,
+    visits:d.visits.length,
+    playerHighOut:playerStats.highOut,
+    botHighOut:botStats.highOut,
+    botAdvantagePct:Number(live.settings.botAdvantagePct)||0,
+    checkoutThreshold:Number(live.settings.checkoutThreshold)||100,
+    checkoutDarts:Number(live.settings.checkoutDarts)||9
+  });
 }
 
 function dartbotTurn(){
-  const live=hub.trainingLive;if(live?.type!=='dartbot')return;const data=live.data;if(data.turn!=='bot')return;
-  const avg=Number(live.settings.botAverage)||50,before=data.botRemaining;
-  const checkoutChance=Math.max(.04,Math.min(.62,(avg-20)/130));
-  let score=0,checkout=false,darts=3;
-  if(before<=170&&before!==169&&before!==168&&before!==166&&before!==165&&before!==163&&before!==162&&before!==159&&Math.random()<checkoutChance){score=before;checkout=true;darts=1+Math.floor(Math.random()*3);}else{
-    score=Math.max(0,Math.min(180,Math.round(normalRandom(avg,Math.max(12,avg*.28)))));
-    if(score>before||before-score===1)score=Math.max(0,Math.min(before-2,score));
+  const training=hub.trainingLive;if(training?.type!=='dartbot')return;
+  const data=training.data;if(data.currentPlayerId!==data.playerB)return;
+  const before=Number(data.remaining[data.playerB]);
+  const threshold=Number(training.settings.checkoutThreshold)||100;
+  let throws=[],targetAverage=currentBotTargetAverage(training);
+  if(before<=threshold){
+    if(!Array.isArray(data.botCheckoutPlan)||!data.botCheckoutPlan.length)buildBotCheckoutPlan(training);
+    throws=(data.botCheckoutPlan||[]).splice(0,3);
+    if(!throws.length){
+      const fallback=extendedCheckoutRoute(before,3)||botRouteForScore(0);
+      throws=Array.isArray(fallback)?fallback.slice(0,3):botRouteForScore(0);
+    }
+  }else{
+    const botStats=livePlayerStats(data.playerB,data);
+    const desiredTotal=targetAverage/3*(botStats.darts+3);
+    const desiredVisit=desiredTotal-botStats.total+normalRandom(0,Math.max(5,targetAverage*.08));
+    const maxScore=Math.min(180,before-2);
+    const visit=nearestBotVisit(desiredVisit,maxScore,before);
+    throws=visit.throws;
   }
-  data.botScore+=score;data.botDarts+=darts;data.botRemaining=checkout?0:before-score;data.visits.push({who:'bot',score,checkout,remaining:data.botRemaining,darts});
-  if(checkout){data.botLegs++;if(newDartbotLeg(data,live.settings))return finishDartbotTraining(live);saveHub();render();return;}
-  data.turn='player';saveHub();render();
+  let score=throws.reduce((sum,d)=>sum+Number(d.value||0),0);
+  let after=before-score;
+  const last=throws.at(-1),checkout=after===0&&isDoubleDart(last);
+  if(after<0||after===1||(after===0&&!checkout)){
+    score=0;after=before;throws=botRouteForScore(0);
+  }
+  const darts=throws.length||3;
+  if(data.botCheckoutDartsLeft !== null && data.botCheckoutDartsLeft !== undefined && Number.isFinite(Number(data.botCheckoutDartsLeft)))data.botCheckoutDartsLeft=Math.max(0,Number(data.botCheckoutDartsLeft)-darts);
+  data.remaining[data.playerB]=after;
+  data.visits.push({
+    playerId:data.playerB,score,enteredScore:score,darts,bust:false,checkout,
+    remainingBefore:before,remainingAfter:after,throws:clone(throws),notation:throws.map(d=>d.label).join(' · '),
+    leg:data.legNumber,at:new Date().toISOString(),targetAverage
+  });
+  if(checkout){
+    const winnerDarts=data.visits.filter(v=>v.leg===data.legNumber&&v.playerId===data.playerB).reduce((sum,v)=>sum+v.darts,0);
+    data.legRecords.push({leg:data.legNumber,winnerId:data.playerB,darts:winnerDarts,checkout:before});
+    data.legs[data.playerB]++;
+    return advanceDartbotTrainingLeg(data.playerB);
+  }
+  data.currentPlayerId=data.playerA;data.botThinking=false;
+  if(after<=threshold&&data.botCheckoutDartsLeft===null)buildBotCheckoutPlan(training);
+  saveHub();render();
 }
 
 function submitSession45Stage(event){
@@ -2986,7 +3243,7 @@ async function installApp() {
 window.addEventListener('beforeinstallprompt',event=>{event.preventDefault();deferredInstallPrompt=event;updateInstallButton();});
 window.addEventListener('appinstalled',()=>{deferredInstallPrompt=null;toast('Aplikacja została zainstalowana');});
 
-if('serviceWorker' in navigator){window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js?v=1.5.0').catch(console.error));}
+if('serviceWorker' in navigator){window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js?v=1.5.1').catch(console.error));}
 
 if (progressCompetition()) saveState();
 render();

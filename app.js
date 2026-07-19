@@ -2,7 +2,7 @@
 
 const LEGACY_STORAGE_KEY = 'dartliga_pwa_state_v1';
 const STORAGE_KEY = 'dartliga_pwa_hub_v2';
-const APP_VERSION = '1.9.0';
+const APP_VERSION = '1.9.1';
 let route = 'home';
 let matchFilter = 'all';
 let tableGroup = 'all';
@@ -995,14 +995,23 @@ function renderBoardViews() {
     <div class="note firebase-note"><strong>Synchronizacja Firebase:</strong> niezależne telefony i tablety korzystają ze wspólnych danych. Wynik, stan tarcz oraz kolejka meczów aktualizują się automatycznie. Lokalna pamięć pozostaje kopią awaryjną na wypadek utraty internetu.</div>`;
 }
 
+function liveDisplayedRemaining(live, playerId) {
+  const stored = Number(live?.remaining?.[playerId] ?? live?.startScore ?? 501);
+  const hasPending = live?.currentPlayerId === playerId && Array.isArray(live?.pendingDarts) && live.pendingDarts.length > 0;
+  if (!hasPending) return stored;
+  const evaluation = evaluatePendingVisit(live);
+  return evaluation.bust ? stored : evaluation.remainingAfter;
+}
+
 function tabletPlayerScore(live, playerId) {
   const stats = genericLiveStats(live, playerId);
   const current = live.currentPlayerId === playerId;
   const starter = live.legStarterId === playerId;
-  return `<div class="tablet-score-player ${current?'active':''}">
+  const pendingPreview = current && Array.isArray(live.pendingDarts) && live.pendingDarts.length > 0;
+  return `<div class="tablet-score-player ${current?'active':''} ${pendingPreview?'pending-preview':''}">
     <div class="tablet-player-icons">${starter?liveStarterGraphic():''}${current?liveTurnGraphic():''}</div>
     <div class="tablet-player-name">${esc(playerName(playerId))}</div>
-    <div class="tablet-remaining">${live.remaining?.[playerId] ?? live.startScore ?? 501}</div>
+    <div class="tablet-remaining">${liveDisplayedRemaining(live, playerId)}</div>
     <div class="tablet-player-stats"><div><b>${fmt(stats.average)}</b><span>średnia</span></div><div><b>${stats.darts}</b><span>lotki</span></div><div><b>${stats.last}</b><span>ostatnia</span></div></div>
   </div>`;
 }
@@ -1036,30 +1045,52 @@ function renderTabletEntry() {
   return `${tabletTopbar('entry')}<div class="tablet-entry-view">${renderScorer()}</div>`;
 }
 
-function tabletQueueMatch(match, type) {
-  if (!match) return `<div class="tablet-queue-match empty-match"><span>${type}</span><strong>Brak meczu</strong><small>Brak spotkania przypisanego do tej pozycji.</small></div>`;
-  const live = match.liveData;
-  const score = live
-    ? `${liveUsesSets(live)?`Sety ${live.sets?.[live.playerA]||0}:${live.sets?.[live.playerB]||0} · `:''}Legi ${live.legs?.[live.playerA]||0}:${live.legs?.[live.playerB]||0}`
-    : matchRuleText(matchLegsToWin(match), matchSetsToWin(match));
-  return `<div class="tablet-queue-match ${live?'current':''}">
-    <span>${type}</span>
-    <strong>${esc(boardMatchNames(match))}</strong>
-    <small>${esc(boardMatchStage(match))} · ${esc(score)}</small>
-    ${live?`<div class="tablet-queue-points"><b>${live.remaining?.[live.playerA] ?? live.startScore}</b><em>:</em><b>${live.remaining?.[live.playerB] ?? live.startScore}</b></div>`:''}
-  </div>`;
+function tabletQueueNextMatch(match) {
+  if (!match) return `<section class="tablet-queue-next empty-match">
+    <div class="tablet-queue-board-badge"><span>Tarcza</span><strong>${tabletBoardNumber}</strong></div>
+    <div><span>Mecz następny</span><strong>Brak kolejnego meczu</strong><small>Brak spotkań oczekujących na tej tarczy.</small></div>
+  </section>`;
+  return `<section class="tablet-queue-next">
+    <div class="tablet-queue-board-badge"><span>Tarcza</span><strong>${tabletBoardNumber}</strong></div>
+    <div>
+      <span>Mecz następny</span>
+      <strong>${esc(boardMatchNames(match))}</strong>
+      <small>${esc(boardMatchStage(match))} · ${esc(matchRuleText(matchLegsToWin(match), matchSetsToWin(match)))}</small>
+    </div>
+  </section>`;
 }
 
 function renderTabletQueue() {
   const current = boardCurrentMatch(tabletBoardNumber, state);
   const next = boardNextMatch(tabletBoardNumber, state);
+  if (!current?.liveData) {
+    return `${tabletTopbar('queue')}<main class="tablet-queue-screen tablet-queue-waiting">
+      ${tabletEmptyState(`Tarcza ${tabletBoardNumber} jest wolna`, 'Gdy mecz zostanie rozpoczęty, w tym miejscu pojawi się pełny i czytelny wynik.', next)}
+      ${tabletQueueNextMatch(next)}
+    </main>`;
+  }
+  const live = current.liveData;
+  const setMode = liveUsesSets(live);
+  const checkout = liveCheckoutRoute(live);
   return `${tabletTopbar('queue')}
     <main class="tablet-queue-screen">
-      <div class="tablet-board-number"><span>Tarcza</span><strong>${tabletBoardNumber}</strong><small>${esc(state.settings.competitionName)}</small></div>
-      <div class="tablet-queue-grid">
-        ${tabletQueueMatch(current, 'Mecz obecny')}
-        ${tabletQueueMatch(next, 'Mecz następny')}
-      </div>
+      <section class="tablet-queue-current">
+        <div class="tablet-queue-current-heading">
+          <div><span>Mecz obecny · Tarcza ${tabletBoardNumber}</span><h1>${esc(boardMatchNames(current))}</h1><p>${esc(boardMatchStage(current))} · ${esc(matchRuleText(live.legsToWin || matchLegsToWin(current), live.setsToWin || matchSetsToWin(current)))}</p></div>
+          <strong>${esc(state.settings.competitionName)}</strong>
+        </div>
+        <div class="tablet-scoreboard tablet-queue-scoreboard">
+          ${tabletPlayerScore(live, live.playerA)}
+          <div class="tablet-score-center">
+            ${setMode?`<div><span>Sety</span><strong>${live.sets?.[live.playerA]||0} : ${live.sets?.[live.playerB]||0}</strong></div>`:''}
+            <div><span>Legi</span><strong>${live.legs?.[live.playerA]||0} : ${live.legs?.[live.playerB]||0}</strong></div>
+            <small>${setMode?`Set ${live.setNumber||1} · `:''}Leg ${live.legNumber||1}</small>
+          </div>
+          ${tabletPlayerScore(live, live.playerB)}
+        </div>
+        ${checkout?`<div class="tablet-checkout tablet-queue-checkout"><span>Checkout</span><strong>${checkout.map(esc).join(' · ')}</strong></div>`:''}
+      </section>
+      ${tabletQueueNextMatch(next)}
     </main>`;
 }
 
@@ -2408,7 +2439,7 @@ function renderScorer() {
               <div class="visit-total ${evaluation.bust?'bust':evaluation.checkout?'checkout':''}">
                 <span>${evaluation.bust?'BUST':evaluation.checkout?'CHECKOUT':'Suma wizyty'}</span>
                 <strong>${evaluation.bust?0:evaluation.enteredScore}</strong>
-                <small>${evaluation.bust?`wynik wróci do ${evaluation.remainingBefore}`:`po zatwierdzeniu zostanie ${evaluation.remainingAfter}`}</small>
+                <small>${evaluation.bust?`wynik wróci do ${evaluation.remainingBefore}`:`na tablicy: ${evaluation.remainingAfter} · zapis po zakończeniu wizyty`}</small>
               </div>
             </div>
 
@@ -2433,7 +2464,7 @@ function renderScorer() {
               <button class="btn ghost" type="button" id="undoVisit" ${live.undo.length?'':'disabled'}>Cofnij ostatnią wizytę</button>
             </div>
           </form>
-          <div class="note" style="margin-top:14px">${dartbotTraining?'Wprowadź swoje lotki dokładnie tak jak w zwykłym meczu. Po trzeciej lotce wizyta zapisze się automatycznie, a Dartbot odpowie własnym rzutem i dopasuje poziom do Twojej aktualnej średniej.':'Najpierw wybierz numer pola, a następnie Singiel, Double albo Triple. Trzecia lotka automatycznie zapisuje wizytę, odejmuje punkty i przełącza zawodnika. Checkout i BUST również zapisują się automatycznie. Przed trzecią lotką możesz cofnąć lotkę albo wyczyścić wizytę.'}</div>
+          <div class="note" style="margin-top:14px">${dartbotTraining?'Wprowadź swoje lotki dokładnie tak jak w zwykłym meczu. Po trzeciej lotce wizyta zapisze się automatycznie, a Dartbot odpowie własnym rzutem i dopasuje poziom do Twojej aktualnej średniej.':'Najpierw wybierz numer pola, a następnie Singiel, Double albo Triple. Po każdej wybranej lotce wynik na tablicy zmienia się od razu. Trzecia lotka automatycznie zapisuje wizytę i przełącza zawodnika. Checkout i BUST również zapisują się automatycznie. Przed trzecią lotką możesz cofnąć lotkę albo wyczyścić wizytę.'}</div>
         </section>
         <section class="card">
           <div class="section-head"><h2>Historia wizyt</h2><span class="badge">${live.visits.length}</span></div>
@@ -2446,10 +2477,11 @@ function scorePlayer(playerId, stats) {
   const live = scorerLive();
   const current = live.currentPlayerId===playerId;
   const starter = live.legStarterId===playerId;
-  return `<div class="score-player ${current?'active':''}">
+  const pendingPreview = current && Array.isArray(live.pendingDarts) && live.pendingDarts.length > 0;
+  return `<div class="score-player ${current?'active':''} ${pendingPreview?'pending-preview':''}">
     <div class="score-player-graphics">${starter?liveStarterGraphic():''}${current?liveTurnGraphic():''}</div>
     <div class="score-player-name">${esc(scorerPlayerName(playerId))}</div>
-    <div class="remaining">${live.remaining[playerId]}</div>
+    <div class="remaining">${liveDisplayedRemaining(live, playerId)}</div>
     <div class="score-stats"><div><b>${fmt(stats.average)}</b><span>średnia</span></div><div><b>${stats.darts}</b><span>lotki</span></div><div><b>${stats.last ?? '—'}</b><span>ostatnia</span></div></div>
   </div>`;
 }
@@ -4365,7 +4397,7 @@ window.addEventListener('dartliga-firebase-hub', event => {
 window.addEventListener('dartliga-firebase-ready', () => {
   firebaseBridge()?.bootstrap?.(clone(hub));
 });
-if('serviceWorker' in navigator){window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js?v=1.9.0').catch(console.error));}
+if('serviceWorker' in navigator){window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js?v=1.9.1').catch(console.error));}
 
 applyStartupTabletView();
 if (!isTabletRoute() && progressCompetition()) saveState();

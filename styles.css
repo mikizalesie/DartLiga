@@ -622,3 +622,367 @@ body.tablet-mode #app{min-height:100vh}
 .firebase-note{border-left-color:var(--primary);background:rgba(34,197,94,.07)}
 @keyframes firebasePulse{0%,100%{opacity:.45;transform:scale(.85)}50%{opacity:1;transform:scale(1.1)}}
 @media(max-width:760px){.firebase-sync-status{margin:6px 0}.firebase-settings-card .section-head{align-items:flex-start;flex-direction:column}.firebase-settings-card .firebase-sync-status{max-width:none;width:100%}}
+
+
+/* =========================================================
+   DartLiga 1.9.1 — tablet UI and live dart preview
+   ========================================================= */
+
+.score-player.pending-preview,
+.tablet-score-player.pending-preview{
+  background:
+    linear-gradient(180deg,rgba(34,197,94,.08),rgba(11,18,32,.98));
+}
+.score-player.pending-preview .remaining,
+.tablet-score-player.pending-preview .tablet-remaining{
+  color:#dcfce7;
+  text-shadow:0 0 24px rgba(34,197,94,.18);
+}
+
+/* Tablet: scoring entry prioritizes the keyboard over the final scoreboard */
+.tablet-entry-view{
+  padding:10px 16px 24px;
+}
+.tablet-entry-view>.topbar{
+  margin-bottom:8px;
+  padding-bottom:4px;
+}
+.tablet-entry-view>.topbar h1{
+  font-size:clamp(22px,2.2vw,32px);
+  margin-bottom:2px;
+}
+.tablet-entry-view>.topbar .subtitle{
+  font-size:12px;
+}
+.tablet-entry-view .scorer{
+  max-width:1900px;
+  gap:9px;
+}
+.tablet-entry-view .scoreboard{
+  grid-template-columns:minmax(0,1fr) 96px minmax(0,1fr);
+  gap:9px;
+}
+.tablet-entry-view .score-player{
+  padding:10px 14px;
+  min-height:0;
+  border-radius:14px;
+}
+.tablet-entry-view .score-player-name{
+  font-size:16px;
+}
+.tablet-entry-view .remaining{
+  font-size:clamp(48px,6vw,82px);
+  margin:6px 0 8px;
+}
+.tablet-entry-view .score-stats{
+  gap:6px;
+}
+.tablet-entry-view .score-stats div{
+  padding:5px;
+}
+.tablet-entry-view .score-stats b{
+  font-size:14px;
+}
+.tablet-entry-view .score-stats span{
+  font-size:9px;
+}
+.tablet-entry-view .versus{
+  min-height:0;
+  border-radius:14px;
+}
+.tablet-entry-view .legs-big,
+.tablet-entry-view .match-score-center strong{
+  font-size:28px;
+}
+.tablet-entry-view .checkout-hint{
+  padding:8px 12px;
+}
+.tablet-entry-view .checkout-hint>strong{
+  font-size:22px;
+}
+.tablet-entry-view .entry-panel{
+  grid-template-columns:minmax(760px,1.65fr) minmax(270px,.55fr);
+  gap:10px;
+  align-items:start;
+}
+.tablet-entry-view .entry-panel>.card{
+  padding:12px;
+}
+.tablet-entry-view .entry-panel>.card:first-child{
+  border-color:rgba(34,197,94,.55);
+  box-shadow:0 0 0 3px rgba(34,197,94,.06);
+}
+.tablet-entry-view .section-head{
+  margin-bottom:8px;
+}
+.tablet-entry-view .section-head h2{
+  font-size:18px;
+}
+.tablet-entry-view .visit-builder{
+  grid-template-columns:1fr 130px;
+  gap:8px;
+  margin-bottom:8px;
+}
+.tablet-entry-view .dart-slots{
+  gap:6px;
+}
+.tablet-entry-view .dart-slot{
+  min-height:70px;
+  padding:6px;
+}
+.tablet-entry-view .dart-slot strong{
+  font-size:20px;
+}
+.tablet-entry-view .visit-total{
+  padding:7px;
+}
+.tablet-entry-view .visit-total strong{
+  font-size:34px;
+  margin:3px 0;
+}
+.tablet-entry-view .dart-step-head{
+  margin:6px 0;
+}
+.tablet-entry-view .dart-step-head.second-step{
+  margin-top:8px;
+}
+.tablet-entry-view .dart-number-grid{
+  gap:8px;
+}
+.tablet-entry-view .dart-number{
+  min-height:64px;
+  font-size:21px;
+  border-radius:13px;
+}
+.tablet-entry-view .multiplier-picker{
+  gap:8px;
+  margin-bottom:7px;
+}
+.tablet-entry-view .multiplier-btn{
+  min-height:66px;
+  padding:9px;
+}
+.tablet-entry-view .multiplier-btn b{
+  width:34px;
+  height:34px;
+  font-size:19px;
+}
+.tablet-entry-view .multiplier-btn span{
+  font-size:13px;
+}
+.tablet-entry-view .dart-special{
+  min-height:58px;
+  font-size:17px;
+}
+.tablet-entry-view .dart-actions{
+  margin-top:9px;
+}
+.tablet-entry-view .visit-history{
+  max-height:520px;
+}
+.tablet-entry-view .note{
+  margin-top:8px!important;
+  padding:8px 10px;
+  font-size:11px;
+}
+
+/* Tablet: queue view uses the same scoreboard language as the score-only view */
+.tablet-queue-screen{
+  min-height:calc(100vh - 62px);
+  padding:20px;
+  display:grid;
+  grid-template-rows:minmax(0,1fr) auto;
+  gap:16px;
+  align-items:stretch;
+}
+.tablet-queue-current{
+  display:grid;
+  align-content:center;
+  gap:14px;
+  padding:20px;
+  border:1px solid rgba(34,197,94,.45);
+  border-radius:24px;
+  background:
+    radial-gradient(circle at 0 0,rgba(34,197,94,.12),transparent 34%),
+    linear-gradient(180deg,rgba(16,24,39,.98),rgba(11,18,32,.98));
+  box-shadow:var(--shadow);
+}
+.tablet-queue-current-heading{
+  display:flex;
+  align-items:flex-end;
+  justify-content:space-between;
+  gap:20px;
+}
+.tablet-queue-current-heading>div{
+  min-width:0;
+}
+.tablet-queue-current-heading span,
+.tablet-queue-next>div:last-child>span{
+  color:#86efac;
+  font-size:11px;
+  font-weight:950;
+  letter-spacing:.1em;
+  text-transform:uppercase;
+}
+.tablet-queue-current-heading h1{
+  margin:4px 0 2px;
+  font-size:clamp(28px,3.7vw,54px);
+  line-height:1;
+}
+.tablet-queue-current-heading p{
+  margin:0;
+  color:var(--muted);
+  font-size:14px;
+}
+.tablet-queue-current-heading>strong{
+  color:var(--muted);
+  font-size:14px;
+  text-align:right;
+}
+.tablet-queue-scoreboard{
+  grid-template-columns:minmax(0,1fr) minmax(105px,145px) minmax(0,1fr);
+  gap:10px;
+}
+.tablet-queue-scoreboard .tablet-score-player{
+  min-height:220px;
+  padding:14px;
+  border-radius:18px;
+}
+.tablet-queue-scoreboard .tablet-player-name{
+  font-size:clamp(19px,2vw,30px);
+}
+.tablet-queue-scoreboard .tablet-remaining{
+  font-size:clamp(76px,10vw,145px);
+  margin:12px 0;
+}
+.tablet-queue-scoreboard .tablet-player-stats div{
+  padding:8px;
+}
+.tablet-queue-scoreboard .tablet-player-stats b{
+  font-size:clamp(14px,1.5vw,20px);
+}
+.tablet-queue-scoreboard .tablet-score-center{
+  border-radius:18px;
+  gap:10px;
+}
+.tablet-queue-scoreboard .tablet-score-center strong{
+  font-size:clamp(28px,3.4vw,44px);
+}
+.tablet-queue-checkout{
+  padding:10px 16px;
+}
+.tablet-queue-checkout strong{
+  font-size:clamp(20px,2.7vw,34px);
+}
+.tablet-queue-next{
+  display:grid;
+  grid-template-columns:115px 1fr;
+  gap:16px;
+  align-items:center;
+  padding:14px 18px;
+  border:1px solid var(--line);
+  border-radius:18px;
+  background:linear-gradient(180deg,rgba(23,32,51,.96),rgba(16,24,39,.96));
+}
+.tablet-queue-next.empty-match{
+  opacity:.75;
+  border-style:dashed;
+}
+.tablet-queue-board-badge{
+  display:grid;
+  place-items:center;
+  padding:9px;
+  border-radius:13px;
+  background:rgba(56,189,248,.09);
+  border:1px solid rgba(56,189,248,.28);
+}
+.tablet-queue-board-badge span{
+  color:#7dd3fc;
+  font-size:9px;
+  font-weight:950;
+  letter-spacing:.1em;
+  text-transform:uppercase;
+}
+.tablet-queue-board-badge strong{
+  font-size:42px;
+  line-height:1;
+}
+.tablet-queue-next>div:last-child{
+  display:grid;
+  gap:3px;
+}
+.tablet-queue-next>div:last-child>strong{
+  font-size:clamp(22px,3vw,38px);
+}
+.tablet-queue-next>div:last-child>small{
+  color:var(--muted);
+  font-size:14px;
+}
+.tablet-queue-waiting{
+  grid-template-rows:minmax(0,1fr) auto;
+}
+.tablet-queue-waiting .tablet-empty-state{
+  min-height:0;
+  border:1px solid var(--line);
+  border-radius:22px;
+  background:var(--panel);
+}
+
+@media(max-width:1100px){
+  .tablet-entry-view .entry-panel{
+    grid-template-columns:minmax(0,1fr) 300px;
+  }
+  .tablet-entry-view .dart-number-grid{
+    grid-template-columns:repeat(10,1fr);
+  }
+  .tablet-queue-scoreboard{
+    grid-template-columns:minmax(0,1fr) 105px minmax(0,1fr);
+  }
+}
+@media(max-width:850px){
+  .tablet-entry-view .entry-panel{
+    grid-template-columns:1fr;
+  }
+  .tablet-entry-view .scoreboard{
+    grid-template-columns:1fr 84px 1fr;
+  }
+  .tablet-entry-view .dart-number-grid{
+    grid-template-columns:repeat(5,1fr);
+  }
+  .tablet-queue-current-heading{
+    display:grid;
+  }
+  .tablet-queue-current-heading>strong{
+    text-align:left;
+  }
+  .tablet-queue-scoreboard{
+    grid-template-columns:1fr;
+  }
+  .tablet-queue-scoreboard .tablet-score-center{
+    min-height:80px;
+    grid-template-columns:1fr 1fr;
+  }
+}
+@media(max-width:600px){
+  .tablet-entry-view{
+    padding:8px;
+  }
+  .tablet-entry-view .scoreboard{
+    grid-template-columns:1fr;
+  }
+  .tablet-entry-view .versus{
+    min-height:70px;
+  }
+  .tablet-entry-view .dart-number{
+    min-height:56px;
+  }
+  .tablet-queue-screen{
+    padding:10px;
+  }
+  .tablet-queue-next{
+    grid-template-columns:82px 1fr;
+  }
+  .tablet-queue-board-badge strong{
+    font-size:32px;
+  }
+}

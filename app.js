@@ -2,7 +2,7 @@
 
 const LEGACY_STORAGE_KEY = 'dartliga_pwa_state_v1';
 const STORAGE_KEY = 'dartliga_pwa_hub_v2';
-const APP_VERSION = '1.3.1';
+const APP_VERSION = '1.4.0';
 let route = 'home';
 let matchFilter = 'all';
 let tableGroup = 'all';
@@ -90,8 +90,73 @@ function defaultHub() {
     version: APP_VERSION,
     activeCompetitionId: competition.id,
     competitions: [competition],
+    singleMatches: [],
+    singleLive: null,
     createdAt: competition.createdAt,
     updatedAt: competition.updatedAt
+  };
+}
+
+function normalizeSingleLive(value) {
+  if (!value || typeof value !== 'object') return null;
+  const playerA = value.playerA || uid('single_a');
+  const playerB = value.playerB || uid('single_b');
+  const startScore = Math.max(2, Number(value.startScore) || 501);
+  const legsToWin = Math.max(1, Number(value.legsToWin) || 2);
+  const playerNames = {
+    [playerA]: String(value.playerNames?.[playerA] || value.playerAName || 'Gracz 1'),
+    [playerB]: String(value.playerNames?.[playerB] || value.playerBName || 'Gracz 2')
+  };
+  const starter = [playerA, playerB].includes(value.initialStarterId) ? value.initialStarterId : playerA;
+  return {
+    ...value,
+    mode: 'single',
+    matchId: value.matchId || uid('single_match'),
+    title: String(value.title || 'Pojedynczy mecz'),
+    playerA,
+    playerB,
+    playerNames,
+    initialStarterId: starter,
+    legStarterId: [playerA, playerB].includes(value.legStarterId) ? value.legStarterId : starter,
+    currentPlayerId: [playerA, playerB].includes(value.currentPlayerId) ? value.currentPlayerId : starter,
+    startScore,
+    legsToWin,
+    doubleOut: value.doubleOut !== false,
+    remaining: {
+      [playerA]: Number(value.remaining?.[playerA]) >= 0 ? Number(value.remaining[playerA]) : startScore,
+      [playerB]: Number(value.remaining?.[playerB]) >= 0 ? Number(value.remaining[playerB]) : startScore
+    },
+    legs: {
+      [playerA]: Math.max(0, Number(value.legs?.[playerA]) || 0),
+      [playerB]: Math.max(0, Number(value.legs?.[playerB]) || 0)
+    },
+    legNumber: Math.max(1, Number(value.legNumber) || 1),
+    visits: Array.isArray(value.visits) ? value.visits : [],
+    legRecords: Array.isArray(value.legRecords) ? value.legRecords : [],
+    undo: Array.isArray(value.undo) ? value.undo : [],
+    pendingDarts: Array.isArray(value.pendingDarts) ? value.pendingDarts : [],
+    pendingSegment: Number.isInteger(Number(value.pendingSegment)) && Number(value.pendingSegment) >= 1 && Number(value.pendingSegment) <= 20 ? Number(value.pendingSegment) : null,
+    pendingMultiplier: ['S','D','T'].includes(value.pendingMultiplier) ? value.pendingMultiplier : 'S',
+    startedAt: value.startedAt || new Date().toISOString()
+  };
+}
+
+function normalizeSingleMatchRecord(value = {}) {
+  return {
+    ...value,
+    id: value.id || value.matchId || uid('single_result'),
+    title: String(value.title || 'Pojedynczy mecz'),
+    playerAName: String(value.playerAName || 'Gracz 1'),
+    playerBName: String(value.playerBName || 'Gracz 2'),
+    startScore: Math.max(2, Number(value.startScore) || 501),
+    legsToWin: Math.max(1, Number(value.legsToWin) || 2),
+    doubleOut: value.doubleOut !== false,
+    legsA: Math.max(0, Number(value.legsA) || 0),
+    legsB: Math.max(0, Number(value.legsB) || 0),
+    statsA: value.statsA || {},
+    statsB: value.statsB || {},
+    startedAt: value.startedAt || value.completedAt || new Date().toISOString(),
+    completedAt: value.completedAt || new Date().toISOString()
   };
 }
 
@@ -126,7 +191,9 @@ function normalizeCompetition(value = {}) {
       ...competition.live,
       startScore: Number(competition.live.startScore) || matchStartScore(liveMatch, competition.settings),
       legsToWin: Number(competition.live.legsToWin) || matchLegsToWin(liveMatch, competition.settings),
+      doubleOut: competition.live.doubleOut !== undefined ? competition.live.doubleOut !== false : competition.settings.doubleOut !== false,
       pendingDarts: Array.isArray(competition.live.pendingDarts) ? competition.live.pendingDarts : [],
+      pendingSegment: Number.isInteger(Number(competition.live.pendingSegment)) && Number(competition.live.pendingSegment) >= 1 && Number(competition.live.pendingSegment) <= 20 ? Number(competition.live.pendingSegment) : null,
       pendingMultiplier: ['S','D','T'].includes(competition.live.pendingMultiplier) ? competition.live.pendingMultiplier : 'S'
     };
   }
@@ -159,7 +226,9 @@ function loadHub() {
           ...parsed,
           version: APP_VERSION,
           activeCompetitionId,
-          competitions
+          competitions,
+          singleMatches: Array.isArray(parsed.singleMatches) ? parsed.singleMatches.map(normalizeSingleMatchRecord) : [],
+          singleLive: normalizeSingleLive(parsed.singleLive)
         };
       }
     }
@@ -172,6 +241,8 @@ function loadHub() {
         version: APP_VERSION,
         activeCompetitionId: competition.id,
         competitions: [competition],
+        singleMatches: [],
+        singleLive: null,
         createdAt: competition.createdAt,
         updatedAt: new Date().toISOString()
       };
@@ -184,6 +255,30 @@ function loadHub() {
 
 let hub = loadHub();
 let state = hub.competitions.find(c => c.id === hub.activeCompetitionId) || hub.competitions[0];
+
+function isSingleScorer() {
+  return route === 'singleScorer';
+}
+
+function scorerLive() {
+  return isSingleScorer() ? hub.singleLive : state.live;
+}
+
+function scorerPlayerName(id) {
+  const live = scorerLive();
+  if (isSingleScorer()) return live?.playerNames?.[id] || 'Gracz';
+  return playerName(id);
+}
+
+function saveScorerState() {
+  if (isSingleScorer()) saveHub();
+  else saveState();
+}
+
+function scorerDoubleOut(live = scorerLive()) {
+  if (live?.doubleOut !== undefined) return live.doubleOut !== false;
+  return state.settings.doubleOut !== false;
+}
 
 function saveHub() {
   hub.version = APP_VERSION;
@@ -335,7 +430,7 @@ function competitionNumbers(competition) {
 }
 
 function navButton(id, icon, label) {
-  const activeRoute = route === 'scorer' ? 'matches' : route;
+  const activeRoute = route === 'scorer' ? 'matches' : (route === 'singleScorer' ? 'single' : route);
   return `<button data-route="${id}" class="${activeRoute === id ? 'active' : ''}"><span class="ico">${icon}</span>${label}</button>`;
 }
 
@@ -350,6 +445,7 @@ function render() {
           ${navButton('dashboard','⌂','Pulpit aktywnej')}
           ${navButton('competition','♟','Konfiguracja')}
           ${navButton('matches','◉','Mecze')}
+          ${navButton('single','◎','Pojedynczy mecz')}
           ${navButton('tables','▦','Tabele')}
           ${navButton('stats','↗','Statystyki')}
           ${navButton('settings','⚙','Ustawienia')}
@@ -376,6 +472,7 @@ function render() {
         ${mobileNav('home','☷','Rozgrywki')}
         ${mobileNav('dashboard','⌂','Pulpit')}
         ${mobileNav('matches','◉','Mecze')}
+        ${mobileNav('single','◎','1 mecz')}
         ${mobileNav('tables','▦','Tabela')}
         ${mobileNav('stats','↗','Stat.')}
       </nav>
@@ -391,7 +488,7 @@ function render() {
 }
 
 function mobileNav(id, icon, label) {
-  const activeRoute = route === 'scorer' ? 'matches' : route;
+  const activeRoute = route === 'scorer' ? 'matches' : (route === 'singleScorer' ? 'single' : route);
   return `<button data-route="${id}" class="${activeRoute === id ? 'active' : ''}"><span>${icon}</span>${label}</button>`;
 }
 
@@ -400,6 +497,8 @@ function renderRoute() {
     case 'home': return renderHome();
     case 'competition': return renderCompetition();
     case 'matches': return renderMatches();
+    case 'single': return renderSingleMatch();
+    case 'singleScorer': return renderScorer();
     case 'tables': return renderTables();
     case 'stats': return renderStats();
     case 'settings': return renderSettings();
@@ -706,40 +805,210 @@ function renderStats() {
     </section>`;
 }
 
+function renderSingleMatch() {
+  const live = hub.singleLive;
+  const history = (hub.singleMatches || []).slice().sort((a,b) => String(b.completedAt || '').localeCompare(String(a.completedAt || '')));
+  return `
+    ${pageHeader(
+      'Szybka gra',
+      'Pojedynczy mecz',
+      'Uruchom niezależny licznik bez tworzenia ligi, grup ani terminarza.',
+      live ? '<button class="btn primary" id="resumeSingleMatch">Wznów rozpoczęty mecz</button>' : ''
+    )}
+
+    ${live ? `<section class="card accent single-live-card">
+      <div class="section-head">
+        <div>
+          <div class="eyebrow">Mecz w trakcie</div>
+          <h2>${esc(live.title || 'Pojedynczy mecz')}</h2>
+          <p class="muted">${esc(live.playerNames?.[live.playerA] || 'Gracz 1')} vs ${esc(live.playerNames?.[live.playerB] || 'Gracz 2')} · ${live.startScore} · pierwszy do ${live.legsToWin} wygranych legów · ${live.doubleOut !== false ? 'Double Out' : 'Straight Out'}</p>
+        </div>
+        <div class="row-actions">
+          <button class="btn primary" id="resumeSingleMatchCard">Wróć do licznika</button>
+          <button class="btn danger" id="abandonSingleMatch">Usuń rozpoczęty mecz</button>
+        </div>
+      </div>
+      <div class="single-live-score">
+        <div><span>${esc(live.playerNames?.[live.playerA] || 'Gracz 1')}</span><strong>${live.legs?.[live.playerA] || 0}</strong><small>pozostało ${live.remaining?.[live.playerA] ?? live.startScore}</small></div>
+        <div class="single-live-vs">:</div>
+        <div><span>${esc(live.playerNames?.[live.playerB] || 'Gracz 2')}</span><strong>${live.legs?.[live.playerB] || 0}</strong><small>pozostało ${live.remaining?.[live.playerB] ?? live.startScore}</small></div>
+      </div>
+    </section>` : ''}
+
+    <div class="grid two" style="margin-top:${live ? '16px' : '0'}">
+      <section class="card">
+        <div class="section-head">
+          <div>
+            <h2>Nowy pojedynczy mecz</h2>
+            <p class="muted">Nazwy graczy i zasady dotyczą wyłącznie tego meczu.</p>
+          </div>
+          <span class="badge blue">X01</span>
+        </div>
+
+        <form id="singleMatchForm" class="form-grid">
+          <div class="field wide">
+            <label>Nazwa meczu (opcjonalnie)</label>
+            <input name="title" maxlength="80" placeholder="np. Trening wieczorny">
+          </div>
+
+          <div class="field">
+            <label>Gracz 1</label>
+            <input name="playerAName" maxlength="50" placeholder="np. Michał" required>
+          </div>
+
+          <div class="field">
+            <label>Gracz 2</label>
+            <input name="playerBName" maxlength="50" placeholder="np. Andrzej" required>
+          </div>
+
+          <div class="field">
+            <label>Punkty startowe</label>
+            <input type="number" name="startScore" min="2" max="5000" value="501" list="singleScorePresets" required>
+            <datalist id="singleScorePresets">
+              <option value="50"></option>
+              <option value="101"></option>
+              <option value="301"></option>
+              <option value="501"></option>
+              <option value="701"></option>
+              <option value="1001"></option>
+            </datalist>
+            <small class="field-help">Możesz wpisać dowolną wartość, np. 50, 301 albo 501.</small>
+          </div>
+
+          <div class="field">
+            <label>Wygrane legi do zwycięstwa</label>
+            <input type="number" name="legsToWin" min="1" max="25" value="3" required>
+          </div>
+
+          <div class="field">
+            <label>Zasada zakończenia</label>
+            <select name="doubleOut">
+              <option value="true" selected>Double Out – zakończenie doublem</option>
+              <option value="false">Straight Out – dowolne zakończenie</option>
+            </select>
+          </div>
+
+          <div class="field">
+            <label>Rozpoczyna pierwszy leg</label>
+            <select name="starter">
+              <option value="A">Gracz 1</option>
+              <option value="B">Gracz 2</option>
+            </select>
+          </div>
+
+          <div class="wide">
+            <button class="btn primary" type="submit">Rozpocznij pojedynczy mecz</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="card">
+        <div class="section-head">
+          <div>
+            <h2>Jak działa ten tryb?</h2>
+            <p class="muted">Mecz jest całkowicie niezależny od aktywnej ligi lub turnieju.</p>
+          </div>
+        </div>
+        <div class="single-feature-list">
+          <div><span>1</span><div><strong>Wpisujesz graczy i zasady</strong><small>Bez dodawania zawodników do rozgrywek.</small></div></div>
+          <div><span>2</span><div><strong>Liczysz lotka po lotce</strong><small>Numer pola, następnie Singiel, Double albo Triple.</small></div></div>
+          <div><span>3</span><div><strong>Trzecia lotka zapisuje wizytę</strong><small>Checkout i BUST są rozpoznawane automatycznie.</small></div></div>
+          <div><span>4</span><div><strong>Wynik trafia do historii</strong><small>Nie zmienia tabeli ani statystyk ligi.</small></div></div>
+        </div>
+      </section>
+    </div>
+
+    <section class="card" style="margin-top:16px">
+      <div class="section-head">
+        <div>
+          <h2>Historia pojedynczych meczów</h2>
+          <p class="muted">Zakończone szybkie mecze zapisane na tym urządzeniu.</p>
+        </div>
+        <span class="badge green">${history.length}</span>
+      </div>
+      ${history.length
+        ? `<div class="single-history">${history.map(singleHistoryRow).join('')}</div>`
+        : empty('Brak zakończonych meczów', 'Pierwszy zakończony pojedynczy mecz pojawi się tutaj.')}
+    </section>`;
+}
+
+function singleHistoryRow(item) {
+  const winner = item.winnerName || (item.legsA > item.legsB ? item.playerAName : item.playerBName);
+  return `<article class="single-history-row">
+    <div class="single-history-date">
+      <span>Zakończono</span>
+      <strong>${formatDateTime(item.completedAt)}</strong>
+    </div>
+    <div class="single-history-main">
+      <div class="competition-title-line">
+        <h3>${esc(item.title || 'Pojedynczy mecz')}</h3>
+        <span class="badge green">Zakończony</span>
+      </div>
+      <div class="single-history-result">
+        <span class="${winner===item.playerAName?'winner':''}">${esc(item.playerAName)}</span>
+        <strong>${item.legsA}:${item.legsB}</strong>
+        <span class="${winner===item.playerBName?'winner':''}">${esc(item.playerBName)}</span>
+      </div>
+      <div class="competition-meta">
+        <span>${item.startScore} punktów</span>
+        <span>do ${item.legsToWin} legów</span>
+        <span>${item.doubleOut !== false ? 'Double Out' : 'Straight Out'}</span>
+        <span>Śr. ${fmt(item.statsA?.average)} / ${fmt(item.statsB?.average)}</span>
+        <span>180: ${Number(item.statsA?.h180 || 0)} / ${Number(item.statsB?.h180 || 0)}</span>
+        <span>High Out: ${Number(item.statsA?.highOut || 0) || '—'} / ${Number(item.statsB?.highOut || 0) || '—'}</span>
+      </div>
+    </div>
+    <div class="competition-actions">
+      <button class="btn small primary single-rematch" data-id="${item.id}">Rewanż</button>
+      <button class="btn small danger single-delete" data-id="${item.id}">Usuń</button>
+    </div>
+  </article>`;
+}
+
 function renderSettings() {
   return `
-    ${pageHeader('Dane aplikacji', 'Ustawienia i kopia zapasowa', 'Dane są zapisywane lokalnie w tej przeglądarce. Eksport JSON obejmuje całe archiwum lig i turniejów.')}
+    ${pageHeader('Dane aplikacji', 'Ustawienia i kopia zapasowa', 'Dane są zapisywane lokalnie w tej przeglądarce. Eksport JSON obejmuje ligi, turnieje oraz pojedyncze mecze.')}
     <div class="grid two">
-      <section class="card"><h2>Kopia danych</h2><p class="muted">Eksport obejmuje wszystkie aktywne i zakończone rozgrywki, zawodników, terminarze, wyniki i statystyki.</p><div class="row-actions"><button class="btn primary" id="exportData">Eksportuj JSON</button><label class="btn info" for="importData">Importuj JSON</label><input id="importData" type="file" accept="application/json" hidden></div></section>
+      <section class="card"><h2>Kopia danych</h2><p class="muted">Eksport obejmuje wszystkie aktywne i zakończone rozgrywki, pojedyncze mecze, zawodników, terminarze, wyniki i statystyki.</p><div class="row-actions"><button class="btn primary" id="exportData">Eksportuj JSON</button><label class="btn info" for="importData">Importuj JSON</label><input id="importData" type="file" accept="application/json" hidden></div></section>
       <section class="card"><h2>Instalacja PWA</h2><p class="muted">Po uruchomieniu przez HTTPS lub lokalny serwer aplikacja może działać jak program i zachować podstawowe pliki offline.</p><button class="btn primary" id="installBtnPage" ${deferredInstallPrompt?'':'disabled'}>Zainstaluj aplikację</button></section>
     </div>
-    <section class="card danger-zone" style="margin-top:16px"><h2 class="red">Strefa niebezpieczna</h2><p class="muted">Usunięcie danych kasuje całe archiwum wszystkich rozgrywek i jest nieodwracalne, chyba że wcześniej wykonano eksport JSON.</p><button class="btn danger" id="resetAll">Usuń całe archiwum</button></section>`;
+    <section class="card danger-zone" style="margin-top:16px"><h2 class="red">Strefa niebezpieczna</h2><p class="muted">Usunięcie danych kasuje całe archiwum lig, turniejów i pojedynczych meczów. Operacja jest nieodwracalna, chyba że wcześniej wykonano eksport JSON.</p><button class="btn danger" id="resetAll">Usuń całe archiwum</button></section>`;
 }
 
 function renderScorer() {
-  const live = state.live;
+  const standalone = isSingleScorer();
+  const live = scorerLive();
   if (!live) {
-    route = 'matches';
-    return renderMatches();
+    route = standalone ? 'single' : 'matches';
+    return standalone ? renderSingleMatch() : renderMatches();
   }
-  const match = state.matches.find(m=>m.id===live.matchId);
-  if (!match) return `<section class="card">${empty('Nie znaleziono meczu','Wróć do terminarza.')}</section>`;
+  const match = standalone ? null : state.matches.find(m=>m.id===live.matchId);
+  if (!standalone && !match) return `<section class="card">${empty('Nie znaleziono meczu','Wróć do terminarza.')}</section>`;
   const statsA = livePlayerStats(live.playerA);
   const statsB = livePlayerStats(live.playerB);
   const visits = live.visits.slice().reverse();
   const evaluation = evaluatePendingVisit(live);
   const pending = live.pendingDarts || [];
   const selectedSegment =
-  Number.isInteger(Number(live.pendingSegment)) &&
-  Number(live.pendingSegment) >= 1 &&
-  Number(live.pendingSegment) <= 20
-    ? Number(live.pendingSegment)
-    : null;
+    Number.isInteger(Number(live.pendingSegment)) &&
+    Number(live.pendingSegment) >= 1 &&
+    Number(live.pendingSegment) <= 20
+      ? Number(live.pendingSegment)
+      : null;
   const locked = evaluation.bust || evaluation.checkout || pending.length >= 3;
   const canSubmit = evaluation.bust || evaluation.checkout || pending.length === 3;
   const submitLabel = evaluation.checkout ? 'Zatwierdź checkout' : (evaluation.bust ? 'Zatwierdź BUST' : 'Zatwierdź wizytę');
+  const backRoute = standalone ? 'single' : 'matches';
+  const contextLabel = standalone
+    ? `${live.doubleOut !== false ? 'Double Out' : 'Straight Out'} · pojedynczy mecz`
+    : (match.bracketRound ? knockoutStageLabel(match.stageKey) : (match.group ? `Grupa ${match.group}` : 'mecz ligowy'));
   return `
-    ${pageHeader('Licznik X01', `${esc(playerName(live.playerA))} vs ${esc(playerName(live.playerB))}`, `${live.startScore || matchStartScore(match)} · pierwszy do ${live.legsToWin || matchLegsToWin(match)} wygranych legów · ${match.bracketRound ? knockoutStageLabel(match.stageKey) : (match.group ? `Grupa ${match.group}` : 'mecz ligowy')}`, `<button class="btn ghost" data-route="matches">Zapisz i wyjdź</button>`)}
+    ${pageHeader(
+      'Licznik X01',
+      `${esc(scorerPlayerName(live.playerA))} vs ${esc(scorerPlayerName(live.playerB))}`,
+      `${live.startScore || (standalone ? 501 : matchStartScore(match))} · pierwszy do ${live.legsToWin || (standalone ? 1 : matchLegsToWin(match))} wygranych legów · ${contextLabel}`,
+      `<button class="btn ghost" data-route="${backRoute}">Zapisz i wyjdź</button>`
+    )}
     <div class="scorer">
       <div class="scoreboard">
         ${scorePlayer(live.playerA, statsA)}
@@ -749,7 +1018,7 @@ function renderScorer() {
       ${renderCheckoutHint(live, evaluation)}
       <div class="entry-panel">
         <section class="card accent">
-          <div class="section-head"><div><h2>Wynik wizyty</h2><div class="muted">Rzuca: <strong class="green">${esc(playerName(live.currentPlayerId))}</strong></div></div><button class="btn small ghost" id="toggleStarter" ${live.visits.some(v=>v.leg===live.legNumber)?'disabled':''}>Zmień rozpoczynającego</button></div>
+          <div class="section-head"><div><h2>Wynik wizyty</h2><div class="muted">Rzuca: <strong class="green">${esc(scorerPlayerName(live.currentPlayerId))}</strong></div></div><button class="btn small ghost" id="toggleStarter" ${live.visits.some(v=>v.leg===live.legNumber)?'disabled':''}>Zmień rozpoczynającego</button></div>
           <form id="scoreForm">
             <div class="visit-builder">
               <div class="dart-slots">${[0,1,2].map(index=>{
@@ -764,95 +1033,73 @@ function renderScorer() {
             </div>
 
             <div class="dart-step-head">
-      <span>1</span>
-      <div>
-        <strong>Wybierz numer pola</strong>
-        <small>Najpierw kliknij liczbę od 1 do 20.</small>
-      </div>
-    </div>
+              <span>1</span>
+              <div>
+                <strong>Wybierz numer pola</strong>
+                <small>Najpierw kliknij liczbę od 1 do 20.</small>
+              </div>
+            </div>
 
-    <div class="dart-number-grid" aria-label="Wybierz numer pola">
-      ${Array.from({length:20},(_,i)=>i+1).map(value=>`
-        <button
-          type="button"
-          class="dart-number ${selectedSegment===value?'selected':''}"
-          data-segment="${value}"
-          ${locked?'disabled':''}
-        >
-          ${value}
-        </button>
-      `).join('')}
-    </div>
+            <div class="dart-number-grid" aria-label="Wybierz numer pola">
+              ${Array.from({length:20},(_,i)=>i+1).map(value=>`
+                <button
+                  type="button"
+                  class="dart-number ${selectedSegment===value?'selected':''}"
+                  data-segment="${value}"
+                  ${locked?'disabled':''}
+                >
+                  ${value}
+                </button>
+              `).join('')}
+            </div>
 
-    <div class="dart-step-head second-step">
-      <span>2</span>
-      <div>
-        <strong>Wybierz rodzaj trafienia</strong>
-        <small>
-          ${selectedSegment
-            ? `Wybrane pole: ${selectedSegment}`
-            : 'Najpierw wybierz numer pola.'}
-        </small>
-      </div>
-    </div>
+            <div class="dart-step-head second-step">
+              <span>2</span>
+              <div>
+                <strong>Wybierz rodzaj trafienia</strong>
+                <small>
+                  ${selectedSegment
+                    ? `Wybrane pole: ${selectedSegment}`
+                    : 'Najpierw wybierz numer pola.'}
+                </small>
+              </div>
+            </div>
 
-    <div class="multiplier-picker" aria-label="Wybierz rodzaj trafienia">
-      ${[
-        ['S','Singiel',1],
-        ['D','Double',2],
-        ['T','Triple',3]
-      ].map(([code,label,multiplier])=>`
-        <button
-          type="button"
-          class="multiplier-btn"
-          data-multiplier="${code}"
-          ${locked||!selectedSegment?'disabled':''}
-        >
-          <b>${code}</b>
-          <span>
-            ${selectedSegment
-              ? `${label}: ${selectedSegment * multiplier} pkt`
-              : label}
-          </span>
-        </button>
-      `).join('')}
-    </div>
+            <div class="multiplier-picker" aria-label="Wybierz rodzaj trafienia">
+              ${[
+                ['S','Singiel',1],
+                ['D','Double',2],
+                ['T','Triple',3]
+              ].map(([code,label,multiplier])=>`
+                <button
+                  type="button"
+                  class="multiplier-btn"
+                  data-multiplier="${code}"
+                  ${locked||!selectedSegment?'disabled':''}
+                >
+                  <b>${code}</b>
+                  <span>
+                    ${selectedSegment
+                      ? `${label}: ${selectedSegment * multiplier} pkt`
+                      : label}
+                  </span>
+                </button>
+              `).join('')}
+            </div>
 
-    <div class="dart-special-label">
-      Bull lub pudło
-    </div>
+            <div class="dart-special-label">Bull lub pudło</div>
 
-    <div class="dart-special-grid">
-      <button
-        type="button"
-        class="dart-special"
-        data-special="S25"
-        ${locked?'disabled':''}
-      >
-        <b>25</b>
-        <span>Outer Bull</span>
-      </button>
-
-      <button
-        type="button"
-        class="dart-special"
-        data-special="DBULL"
-        ${locked?'disabled':''}
-      >
-        <b>50</b>
-        <span>Bull</span>
-      </button>
-
-      <button
-        type="button"
-        class="dart-special miss"
-        data-special="MISS"
-        ${locked?'disabled':''}
-      >
-        <b>0</b>
-        <span>Pudło</span>
-      </button>
-    </div>
+            <div class="dart-special-grid">
+              <button type="button" class="dart-special" data-special="S25" ${locked?'disabled':''}>
+                <b>25</b><span>Outer Bull</span>
+              </button>
+              <button type="button" class="dart-special" data-special="DBULL" ${locked?'disabled':''}>
+                <b>50</b><span>Bull</span>
+              </button>
+              <button type="button" class="dart-special miss" data-special="MISS" ${locked?'disabled':''}>
+                <b>0</b><span>Pudło</span>
+              </button>
+            </div>
 
             <div class="dart-actions">
               <button class="btn primary" type="submit" ${canSubmit?'':'disabled'}>${submitLabel}</button>
@@ -865,15 +1112,15 @@ function renderScorer() {
         </section>
         <section class="card">
           <div class="section-head"><h2>Historia wizyt</h2><span class="badge">${live.visits.length}</span></div>
-          <div class="visit-history">${visits.length ? visits.map(v=>`<div class="visit"><div class="visit-player"><span>${esc(playerName(v.playerId))}${v.checkout?' · checkout':''}${v.bust?' · BUST':''}</span>${visitNotation(v)?`<small>${esc(visitNotation(v))}</small>`:''}</div><span class="vscore ${v.bust?'red':''}">${v.bust?'0':v.score}</span><span class="vrem">zostało ${v.remainingAfter}</span></div>`).join('') : empty('Pierwszy rzut','Wybierz trzy lotki, aby zapisać pierwszą wizytę.')}</div>
+          <div class="visit-history">${visits.length ? visits.map(v=>`<div class="visit"><div class="visit-player"><span>${esc(scorerPlayerName(v.playerId))}${v.checkout?' · checkout':''}${v.bust?' · BUST':''}</span>${visitNotation(v)?`<small>${esc(visitNotation(v))}</small>`:''}</div><span class="vscore ${v.bust?'red':''}">${v.bust?'0':v.score}</span><span class="vrem">zostało ${v.remainingAfter}</span></div>`).join('') : empty('Pierwszy rzut','Wybierz trzy lotki, aby zapisać pierwszą wizytę.')}</div>
         </section>
       </div>
     </div>`;
 }
 
 function scorePlayer(playerId, stats) {
-  const live = state.live;
-  return `<div class="score-player ${live.currentPlayerId===playerId?'active':''}"><div class="score-player-name">${esc(playerName(playerId))}</div><div class="remaining">${live.remaining[playerId]}</div><div class="score-stats"><div><b>${fmt(stats.average)}</b><span>średnia</span></div><div><b>${stats.darts}</b><span>lotki</span></div><div><b>${stats.last ?? '—'}</b><span>ostatnia</span></div></div></div>`;
+  const live = scorerLive();
+  return `<div class="score-player ${live.currentPlayerId===playerId?'active':''}"><div class="score-player-name">${esc(scorerPlayerName(playerId))}</div><div class="remaining">${live.remaining[playerId]}</div><div class="score-stats"><div><b>${fmt(stats.average)}</b><span>średnia</span></div><div><b>${stats.darts}</b><span>lotki</span></div><div><b>${stats.last ?? '—'}</b><span>ostatnia</span></div></div></div>`;
 }
 
 function bindCurrentPage() {
@@ -883,6 +1130,12 @@ function bindCurrentPage() {
   $('#newCompetitionFormat')?.addEventListener('change', updateNewCompetitionFields);
   $('#competitionFormat')?.addEventListener('change', updateCurrentCompetitionFields);
   updateNewCompetitionFields();
+  $('#singleMatchForm')?.addEventListener('submit', createSingleMatch);
+  $('#resumeSingleMatch')?.addEventListener('click', resumeSingleMatch);
+  $('#resumeSingleMatchCard')?.addEventListener('click', resumeSingleMatch);
+  $('#abandonSingleMatch')?.addEventListener('click', abandonSingleMatch);
+  $$('.single-rematch').forEach(b=>b.addEventListener('click',()=>startSingleRematch(b.dataset.id)));
+  $$('.single-delete').forEach(b=>b.addEventListener('click',()=>deleteSingleMatch(b.dataset.id)));
   $$('[data-competition-filter]').forEach(b=>b.addEventListener('click',()=>{competitionFilter=b.dataset.competitionFilter;render();}));
   $$('.open-competition').forEach(b=>b.addEventListener('click',()=>activateCompetition(b.dataset.id,'dashboard')));
   $$('.finish-competition').forEach(b=>b.addEventListener('click',()=>finishCompetition(b.dataset.id)));
@@ -1440,6 +1693,117 @@ function shuffle(array) {
   return array;
 }
 
+function createSingleLive(config = {}) {
+  const playerA = uid('single_a');
+  const playerB = uid('single_b');
+  const startScore = Math.max(2, Number(config.startScore) || 501);
+  const legsToWin = Math.max(1, Number(config.legsToWin) || 3);
+  const starter = config.starter === 'B' ? playerB : playerA;
+  return {
+    mode: 'single',
+    matchId: uid('single_match'),
+    title: String(config.title || '').trim() || `${config.playerAName} vs ${config.playerBName}`,
+    playerA,
+    playerB,
+    playerNames: {
+      [playerA]: String(config.playerAName || 'Gracz 1').trim() || 'Gracz 1',
+      [playerB]: String(config.playerBName || 'Gracz 2').trim() || 'Gracz 2'
+    },
+    initialStarterId: starter,
+    legStarterId: starter,
+    currentPlayerId: starter,
+    startScore,
+    legsToWin,
+    doubleOut: config.doubleOut !== false,
+    remaining: {
+      [playerA]: startScore,
+      [playerB]: startScore
+    },
+    legs: {
+      [playerA]: 0,
+      [playerB]: 0
+    },
+    legNumber: 1,
+    visits: [],
+    legRecords: [],
+    undo: [],
+    pendingDarts: [],
+    pendingSegment: null,
+    pendingMultiplier: 'S',
+    startedAt: new Date().toISOString()
+  };
+}
+
+function createSingleMatch(event) {
+  event.preventDefault();
+  const data = new FormData(event.currentTarget);
+  const playerAName = String(data.get('playerAName') || '').trim();
+  const playerBName = String(data.get('playerBName') || '').trim();
+  if (!playerAName || !playerBName) return toast('Wpisz nazwy obu graczy');
+  const startScore = Number(data.get('startScore'));
+  const legsToWin = Number(data.get('legsToWin'));
+  if (!Number.isInteger(startScore) || startScore < 2 || startScore > 5000) return toast('Podaj prawidłową liczbę punktów startowych');
+  if (!Number.isInteger(legsToWin) || legsToWin < 1 || legsToWin > 25) return toast('Podaj prawidłową liczbę wygranych legów');
+  if (hub.singleLive && !confirm('Pojedynczy mecz jest już rozpoczęty. Usunąć go i rozpocząć nowy?')) return;
+  hub.singleLive = createSingleLive({
+    title: String(data.get('title') || '').trim(),
+    playerAName,
+    playerBName,
+    startScore,
+    legsToWin,
+    doubleOut: String(data.get('doubleOut')) !== 'false',
+    starter: String(data.get('starter') || 'A')
+  });
+  saveHub();
+  route = 'singleScorer';
+  render();
+  toast('Pojedynczy mecz rozpoczęty');
+}
+
+function resumeSingleMatch() {
+  if (!hub.singleLive) return toast('Brak rozpoczętego pojedynczego meczu');
+  route = 'singleScorer';
+  render();
+}
+
+function abandonSingleMatch() {
+  if (!hub.singleLive) return;
+  if (!confirm('Usunąć rozpoczęty pojedynczy mecz? Niezapisanych wyników nie będzie można odzyskać.')) return;
+  hub.singleLive = null;
+  saveHub();
+  render();
+  toast('Rozpoczęty mecz został usunięty');
+}
+
+function startSingleRematch(id) {
+  const item = (hub.singleMatches || []).find(match => match.id === id);
+  if (!item) return;
+  if (hub.singleLive && !confirm('Pojedynczy mecz jest już rozpoczęty. Zastąpić go rewanżem?')) return;
+  hub.singleLive = createSingleLive({
+    title: `${item.playerAName} vs ${item.playerBName} – rewanż`,
+    playerAName: item.playerAName,
+    playerBName: item.playerBName,
+    startScore: item.startScore,
+    legsToWin: item.legsToWin,
+    doubleOut: item.doubleOut !== false,
+    starter: 'B'
+  });
+  saveHub();
+  route = 'singleScorer';
+  render();
+  toast('Rewanż rozpoczęty');
+}
+
+function deleteSingleMatch(id) {
+  const item = (hub.singleMatches || []).find(match => match.id === id);
+  if (!item) return;
+  if (!confirm(`Usunąć z historii mecz „${item.title}”?`)) return;
+  hub.singleMatches = (hub.singleMatches || []).filter(match => match.id !== id);
+  saveHub();
+  render();
+  toast('Mecz usunięty z historii');
+}
+
 function startMatch(id) {
   if (!ensureCompetitionOpen()) return;
   const match=state.matches.find(m=>m.id===id); if(!match) return;
@@ -1455,10 +1819,10 @@ function createLive(match) {
   return {
     matchId:match.id,playerA:match.playerA,playerB:match.playerB,
     initialStarterId:match.playerA,legStarterId:match.playerA,currentPlayerId:match.playerA,
-    startScore,legsToWin,
+    startScore,legsToWin,doubleOut:state.settings.doubleOut!==false,
     remaining:{[match.playerA]:startScore,[match.playerB]:startScore},
     legs:{[match.playerA]:0,[match.playerB]:0},legNumber:1,visits:[],legRecords:[],undo:[],
-    pendingDarts:[],pendingMultiplier:'S',startedAt:new Date().toISOString()
+    pendingDarts:[],pendingSegment:null,pendingMultiplier:'S',startedAt:new Date().toISOString()
   };
 }
 
@@ -1502,7 +1866,7 @@ function reopenMatch(id) {
 }
 
 function snapshotLive() {
-  const snap=clone(state.live);delete snap.undo;return snap;
+  const snap=clone(scorerLive());delete snap.undo;return snap;
 }
 
 const checkoutSuggestionCache = new Map();
@@ -1547,10 +1911,11 @@ function isDoubleDart(dart) {
   return dart?.multiplier==='D';
 }
 
-function evaluatePendingVisit(live=state.live) {
+function evaluatePendingVisit(live=scorerLive()) {
   const pending = Array.isArray(live?.pendingDarts) ? live.pendingDarts : [];
   const pid = live?.currentPlayerId;
   const before = Number(live?.remaining?.[pid] || 0);
+  const doubleOut = scorerDoubleOut(live);
   let remaining = before;
   let enteredScore = 0;
   let bust = false;
@@ -1558,8 +1923,9 @@ function evaluatePendingVisit(live=state.live) {
   for(const dart of pending){
     enteredScore += Number(dart.value || 0);
     const after = remaining - Number(dart.value || 0);
-    const invalidFinish = after===0 && state.settings.doubleOut !== false && !isDoubleDart(dart);
-    if(after<0 || after===1 || invalidFinish){
+    const invalidFinish = after===0 && doubleOut && !isDoubleDart(dart);
+    const impossibleRemainder = doubleOut && after===1;
+    if(after<0 || impossibleRemainder || invalidFinish){
       bust = true;
       remaining = before;
       break;
@@ -1652,7 +2018,7 @@ function renderCheckoutHint(live, evaluation) {
     return `<div class="checkout-hint checkout-ready" aria-live="polite"><span>CHECKOUT</span><strong>${(live.pendingDarts||[]).map(d=>esc(d.label)).join(' · ')}</strong><small>Zamknięcie w ${(live.pendingDarts||[]).length} ${lotkaWord((live.pendingDarts||[]).length)}.</small></div>`;
   }
   const dartsLeft=3-(live.pendingDarts||[]).length;
-  const suggestion=checkoutSuggestion(evaluation.remainingAfter,dartsLeft,state.settings.doubleOut!==false);
+  const suggestion=checkoutSuggestion(evaluation.remainingAfter,dartsLeft,scorerDoubleOut(live));
   if(!suggestion)return '';
   return `<div class="checkout-hint" aria-live="polite"><span>Podpowiedź checkout</span><strong>${suggestion.map(esc).join(' · ')}</strong><small>${evaluation.remainingAfter} punktów · możliwe w ${suggestion.length} ${lotkaWord(suggestion.length)}.</small></div>`;
 }
@@ -1667,7 +2033,7 @@ function visitNotation(visit) {
 }
 
 function selectDartSegment(segment) {
-  const live = state.live;
+  const live = scorerLive();
 
   if (!live) return;
 
@@ -1693,12 +2059,12 @@ function selectDartSegment(segment) {
 
   live.pendingSegment = value;
 
-  saveState();
+  saveScorerState();
   render();
 }
 
 function autoSubmitPendingVisit() {
-  const live = state.live;
+  const live = scorerLive();
 
   if (!live) return false;
 
@@ -1720,7 +2086,7 @@ function autoSubmitPendingVisit() {
    * Zapisujemy trzecią lotkę w pamięci i pokazujemy ją
    * na ekranie. Następnie zatwierdzamy całą wizytę.
    */
-  saveState();
+  saveScorerState();
   render();
 
   setTimeout(() => {
@@ -1733,7 +2099,7 @@ function autoSubmitPendingVisit() {
 }
 
 function addPendingDart(multiplier) {
-  const live = state.live;
+  const live = scorerLive();
 
   if (
     !live ||
@@ -1777,12 +2143,12 @@ function addPendingDart(multiplier) {
     return;
   }
 
-  saveState();
+  saveScorerState();
   render();
 }
 
 function addSpecialDart(code) {
-  const live = state.live;
+  const live = scorerLive();
 
   if (!live) return;
 
@@ -1809,12 +2175,12 @@ function addSpecialDart(code) {
     return;
   }
 
-  saveState();
+  saveScorerState();
   render();
 }
 
 function undoPendingDart() {
-  const live = state.live;
+  const live = scorerLive();
 
   if (!live) return;
 
@@ -1824,7 +2190,7 @@ function undoPendingDart() {
   ) {
     live.pendingSegment = null;
 
-    saveState();
+    saveScorerState();
     render();
 
     return;
@@ -1836,31 +2202,31 @@ function undoPendingDart() {
 
   live.pendingDarts.pop();
 
-  saveState();
+  saveScorerState();
   render();
 }
 
 function clearPendingDarts() {
-  const live = state.live;
+  const live = scorerLive();
 
   if (!live) return;
 
   live.pendingDarts = [];
   live.pendingSegment = null;
 
-  saveState();
+  saveScorerState();
   render();
 }
 
 function submitScore(event) {
   event.preventDefault();
-  const live=state.live;if(!live)return;
+  const live=scorerLive();if(!live)return;
   live.pendingDarts=Array.isArray(live.pendingDarts)?live.pendingDarts:[];
   if(!live.pendingDarts.length)return toast('Wybierz co najmniej jedną lotkę');
   const evaluation=evaluatePendingVisit(live);
   if(!evaluation.bust&&!evaluation.checkout&&live.pendingDarts.length<3)return toast('Dodaj trzecią lotkę albo wybierz Pudło');
   const pid=live.currentPlayerId;
-  if(evaluation.checkout && live.legs[pid]+1>=Number(live.legsToWin || 2) && !confirm(`Checkout ${evaluation.remainingBefore}. Zakończyć mecz zwycięstwem ${playerName(pid)}?`)) return;
+  if(evaluation.checkout && live.legs[pid]+1>=Number(live.legsToWin || 2) && !confirm(`Checkout ${evaluation.remainingBefore}. Zakończyć mecz zwycięstwem ${scorerPlayerName(pid)}?`)) return;
   live.undo.push(snapshotLive());
   if(live.undo.length>50)live.undo.shift();
   const throws=clone(live.pendingDarts);
@@ -1896,21 +2262,58 @@ function submitScore(event) {
     const other=live.initialStarterId===live.playerA?live.playerB:live.playerA;
     live.legStarterId=live.legNumber%2===1?live.initialStarterId:other;
     live.currentPlayerId=live.legStarterId;
-    toast(`Leg dla ${playerName(pid)}`);
+    toast(`Leg dla ${scorerPlayerName(pid)}`);
   }else{
     live.currentPlayerId=pid===live.playerA?live.playerB:live.playerA;
   }
-  saveState();render();
+  saveScorerState();render();
 }
 
 function finalizeLiveMatch(winnerId) {
-  const live=state.live;
+  const live=scorerLive();
+  if(!live)return;
+
+  if(isSingleScorer()){
+    const statsA=summarizeLivePlayer(live.playerA,live);
+    const statsB=summarizeLivePlayer(live.playerB,live);
+    const completedAt=new Date().toISOString();
+    const result=normalizeSingleMatchRecord({
+      id:live.matchId,
+      title:live.title,
+      playerAName:live.playerNames?.[live.playerA] || 'Gracz 1',
+      playerBName:live.playerNames?.[live.playerB] || 'Gracz 2',
+      startScore:live.startScore,
+      legsToWin:live.legsToWin,
+      doubleOut:live.doubleOut!==false,
+      initialStarterName:live.playerNames?.[live.initialStarterId] || '',
+      legsA:live.legs[live.playerA],
+      legsB:live.legs[live.playerB],
+      winnerName:live.playerNames?.[winnerId] || '',
+      statsA,
+      statsB,
+      visits:clone(live.visits),
+      legRecords:clone(live.legRecords),
+      startedAt:live.startedAt,
+      completedAt
+    });
+    hub.singleMatches=[
+      result,
+      ...(hub.singleMatches || []).filter(item=>item.id!==result.id)
+    ];
+    hub.singleLive=null;
+    saveHub();
+    route='single';
+    render();
+    toast(`Mecz wygrywa ${result.winnerName}`);
+    return;
+  }
+
   const match=state.matches.find(m=>m.id===live.matchId);
   if(!match)return;
   match.legsA=live.legs[live.playerA];match.legsB=live.legs[live.playerB];match.winnerId=winnerId;match.status='completed';match.completedAt=new Date().toISOString();
   match.stats={
-    [live.playerA]:summarizeLivePlayer(live.playerA),
-    [live.playerB]:summarizeLivePlayer(live.playerB)
+    [live.playerA]:summarizeLivePlayer(live.playerA,live),
+    [live.playerB]:summarizeLivePlayer(live.playerB,live)
   };
   state.live=null;
   const progress=progressCompetition();
@@ -1920,30 +2323,33 @@ function finalizeLiveMatch(winnerId) {
   else toast(`Mecz wygrywa ${playerName(winnerId)}`);
 }
 
-function summarizeLivePlayer(pid) {
-  const visits=state.live.visits.filter(v=>v.playerId===pid);
+function summarizeLivePlayer(pid, live=scorerLive()) {
+  const visits=(live?.visits || []).filter(v=>v.playerId===pid);
   const totalScore=visits.reduce((s,v)=>s+v.score,0),totalDarts=visits.reduce((s,v)=>s+v.darts,0);
   const outs=visits.filter(v=>v.checkout).map(v=>v.remainingBefore);
-  const wonLegs=state.live.legRecords.filter(l=>l.winnerId===pid).map(l=>l.darts);
+  const wonLegs=(live?.legRecords || []).filter(l=>l.winnerId===pid).map(l=>l.darts);
   return {totalScore,totalDarts,average:totalDarts?totalScore/totalDarts*3:0,h100:visits.filter(v=>v.score>=100&&v.score<140).length,h140:visits.filter(v=>v.score>=140&&v.score<180).length,h180:visits.filter(v=>v.score===180).length,highOut:outs.length?Math.max(...outs):0,bestLeg:wonLegs.length?Math.min(...wonLegs):0};
 }
 
 function undoVisit() {
-  const live=state.live;if(!live?.undo.length)return;
-  const stack=live.undo.slice();const previous=stack.pop();state.live={...previous,undo:stack};saveState();render();toast('Cofnięto ostatnią wizytę');
+  const live=scorerLive();if(!live?.undo.length)return;
+  const stack=live.undo.slice();const previous=stack.pop();
+  if(isSingleScorer()) hub.singleLive={...previous,undo:stack};
+  else state.live={...previous,undo:stack};
+  saveScorerState();render();toast('Cofnięto ostatnią wizytę');
 }
 
 function toggleLegStarter() {
-  const live=state.live;if(!live)return;
+  const live=scorerLive();if(!live)return;
   if(live.visits.some(v=>v.leg===live.legNumber))return;
   live.legStarterId=live.legStarterId===live.playerA?live.playerB:live.playerA;
   live.currentPlayerId=live.legStarterId;
   if(live.legNumber===1)live.initialStarterId=live.legStarterId;
-  saveState();render();
+  saveScorerState();render();
 }
 
-function livePlayerStats(pid) {
-  const visits=state.live.visits.filter(v=>v.playerId===pid);
+function livePlayerStats(pid, live=scorerLive()) {
+  const visits=(live?.visits || []).filter(v=>v.playerId===pid);
   const total=visits.reduce((s,v)=>s+v.score,0),darts=visits.reduce((s,v)=>s+v.darts,0);
   return {average:darts?total/darts*3:0,darts,last:visits.length?(visits.at(-1).bust?'BUST':visits.at(-1).score):null};
 }
@@ -2003,12 +2409,19 @@ function importData(event) {
     if(Array.isArray(imported.competitions)){
       const competitions=imported.competitions.map(normalizeCompetition);
       if(!competitions.length)throw new Error('format');
-      nextHub={...imported,version:APP_VERSION,competitions,activeCompetitionId:competitions.some(c=>c.id===imported.activeCompetitionId)?imported.activeCompetitionId:competitions[0].id};
+      nextHub={
+        ...imported,
+        version:APP_VERSION,
+        competitions,
+        activeCompetitionId:competitions.some(c=>c.id===imported.activeCompetitionId)?imported.activeCompetitionId:competitions[0].id,
+        singleMatches:Array.isArray(imported.singleMatches)?imported.singleMatches.map(normalizeSingleMatchRecord):[],
+        singleLive:normalizeSingleLive(imported.singleLive)
+      };
     }else if(imported.settings&&Array.isArray(imported.players)&&Array.isArray(imported.matches)){
       const competition=normalizeCompetition(imported);
-      nextHub={version:APP_VERSION,activeCompetitionId:competition.id,competitions:[competition],createdAt:competition.createdAt,updatedAt:new Date().toISOString()};
+      nextHub={version:APP_VERSION,activeCompetitionId:competition.id,competitions:[competition],singleMatches:[],singleLive:null,createdAt:competition.createdAt,updatedAt:new Date().toISOString()};
     }else throw new Error('format');
-    if(!confirm('Import zastąpi całe obecne archiwum rozgrywek. Kontynuować?'))return;
+    if(!confirm('Import zastąpi całe obecne archiwum lig, turniejów i pojedynczych meczów. Kontynuować?'))return;
     hub=nextHub;
     state=hub.competitions.find(c=>c.id===hub.activeCompetitionId)||hub.competitions[0];
     progressCompetition();
@@ -2017,7 +2430,7 @@ function importData(event) {
 }
 
 function resetAll() {
-  if(!confirm('Usunąć całe archiwum: wszystkie ligi, turnieje, zawodników i wyniki?'))return;
+  if(!confirm('Usunąć całe archiwum: wszystkie ligi, turnieje, pojedyncze mecze, zawodników i wyniki?'))return;
   if(!confirm('To ostatnie potwierdzenie. Tej operacji nie można cofnąć.'))return;
   hub=defaultHub();state=hub.competitions[0];saveHub();route='home';render();toast('Całe archiwum zostało usunięte');
 }
@@ -2034,7 +2447,7 @@ async function installApp() {
 window.addEventListener('beforeinstallprompt',event=>{event.preventDefault();deferredInstallPrompt=event;updateInstallButton();});
 window.addEventListener('appinstalled',()=>{deferredInstallPrompt=null;toast('Aplikacja została zainstalowana');});
 
-if('serviceWorker' in navigator){window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js?v=1.3.0').catch(console.error));}
+if('serviceWorker' in navigator){window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js?v=1.4.0').catch(console.error));}
 
 if (progressCompetition()) saveState();
 render();

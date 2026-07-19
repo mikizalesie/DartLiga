@@ -2,11 +2,13 @@
 
 const LEGACY_STORAGE_KEY = 'dartliga_pwa_state_v1';
 const STORAGE_KEY = 'dartliga_pwa_hub_v2';
-const APP_VERSION = '1.5.1';
+const APP_VERSION = '1.6.0';
 let route = 'home';
 let matchFilter = 'all';
 let tableGroup = 'all';
 let competitionFilter = 'all';
+let liveFilter = 'all';
+let liveSearch = '';
 let deferredInstallPrompt = null;
 let newCompetitionPanelOpen = false;
 let trainingSetupType = null;
@@ -379,6 +381,45 @@ function trainingMetric(session) {
   }
 }
 
+function normalizeCompetitionLive(value, match = {}, settings = {}) {
+  if (!value || typeof value !== 'object') return null;
+  const playerA = value.playerA || match.playerA;
+  const playerB = value.playerB || match.playerB;
+  if (!playerA || !playerB) return null;
+  const startScore = Math.max(2, Number(value.startScore) || Number(match.startScore) || Number(settings.startScore) || 501);
+  const legsToWin = Math.max(1, Number(value.legsToWin) || Number(match.legsToWin) || Number(settings.legsToWin) || 2);
+  const starter = [playerA, playerB].includes(value.initialStarterId) ? value.initialStarterId : playerA;
+  return {
+    ...value,
+    matchId: value.matchId || match.id,
+    playerA,
+    playerB,
+    initialStarterId: starter,
+    legStarterId: [playerA, playerB].includes(value.legStarterId) ? value.legStarterId : starter,
+    currentPlayerId: [playerA, playerB].includes(value.currentPlayerId) ? value.currentPlayerId : starter,
+    startScore,
+    legsToWin,
+    doubleOut: value.doubleOut !== undefined ? value.doubleOut !== false : settings.doubleOut !== false,
+    remaining: {
+      [playerA]: Number(value.remaining?.[playerA]) >= 0 ? Number(value.remaining[playerA]) : startScore,
+      [playerB]: Number(value.remaining?.[playerB]) >= 0 ? Number(value.remaining[playerB]) : startScore
+    },
+    legs: {
+      [playerA]: Math.max(0, Number(value.legs?.[playerA]) || 0),
+      [playerB]: Math.max(0, Number(value.legs?.[playerB]) || 0)
+    },
+    legNumber: Math.max(1, Number(value.legNumber) || 1),
+    visits: Array.isArray(value.visits) ? value.visits : [],
+    legRecords: Array.isArray(value.legRecords) ? value.legRecords : [],
+    undo: Array.isArray(value.undo) ? value.undo : [],
+    pendingDarts: Array.isArray(value.pendingDarts) ? value.pendingDarts : [],
+    pendingSegment: Number.isInteger(Number(value.pendingSegment)) && Number(value.pendingSegment) >= 1 && Number(value.pendingSegment) <= 20 ? Number(value.pendingSegment) : null,
+    pendingMultiplier: ['S','D','T'].includes(value.pendingMultiplier) ? value.pendingMultiplier : 'S',
+    startedAt: value.startedAt || new Date().toISOString(),
+    updatedAt: value.updatedAt || value.startedAt || new Date().toISOString()
+  };
+}
+
 function normalizeCompetition(value = {}) {
   const competition = defaultCompetition({
     ...value,
@@ -406,29 +447,29 @@ function normalizeCompetition(value = {}) {
   });
   if (competition.live) {
     const liveMatch = competition.matches.find(match => match.id === competition.live.matchId);
-    competition.live = {
-      ...competition.live,
-      startScore: Number(competition.live.startScore) || matchStartScore(liveMatch, competition.settings),
-      legsToWin: Number(competition.live.legsToWin) || matchLegsToWin(liveMatch, competition.settings),
-      doubleOut: competition.live.doubleOut !== undefined ? competition.live.doubleOut !== false : competition.settings.doubleOut !== false,
-      pendingDarts: Array.isArray(competition.live.pendingDarts) ? competition.live.pendingDarts : [],
-      pendingSegment: Number.isInteger(Number(competition.live.pendingSegment)) && Number(competition.live.pendingSegment) >= 1 && Number(competition.live.pendingSegment) <= 20 ? Number(competition.live.pendingSegment) : null,
-      pendingMultiplier: ['S','D','T'].includes(competition.live.pendingMultiplier) ? competition.live.pendingMultiplier : 'S'
-    };
+    competition.live = normalizeCompetitionLive(competition.live, liveMatch || {}, competition.settings);
+    if (competition.live && liveMatch) {
+      liveMatch.liveData = clone(competition.live);
+      liveMatch.status = 'live';
+    }
   }
+  const fallbackLive = competition.matches.find(match => match.status === 'live' && match.liveData);
+  if (!competition.live && fallbackLive) competition.live = clone(fallbackLive.liveData);
   return competition;
 }
 
 function normalizeMatch(match = {}, settings = {}) {
   const bracket = Boolean(match.bracketRound);
   const stageKey = match.stageKey || null;
-  return {
+  const normalized = {
     ...match,
     phase: match.phase || (bracket ? 'knockout' : (match.group ? 'group' : 'league')),
     stageKey,
     startScore: Number(match.startScore) || Number(settings.startScore) || 501,
     legsToWin: Number(match.legsToWin) || (bracket ? knockoutLegsForStage(stageKey, settings) : Number(settings.legsToWin) || 2)
   };
+  normalized.liveData = normalizeCompetitionLive(match.liveData, normalized, settings);
+  return normalized;
 }
 
 function loadHub() {
@@ -521,7 +562,17 @@ function saveHub() {
 
 saveHub();
 
+function syncActiveCompetitionLive() {
+  if (!state?.live?.matchId) return;
+  const match = state.matches.find(item => item.id === state.live.matchId);
+  if (!match) return;
+  state.live.updatedAt = new Date().toISOString();
+  match.liveData = clone(state.live);
+  match.status = 'live';
+}
+
 function saveState() {
+  syncActiveCompetitionLive();
   state.version = APP_VERSION;
   state.updatedAt = new Date().toISOString();
   const index = hub.competitions.findIndex(c => c.id === state.id);
@@ -663,7 +714,7 @@ function competitionNumbers(competition) {
 }
 
 function navButton(id, icon, label) {
-  const activeRoute = route === 'scorer' ? 'matches' : (route === 'singleScorer' ? 'single' : (route === 'trainingRun' || route === 'trainingSetup' ? 'training' : route));
+  const activeRoute = route === 'scorer' ? 'live' : (route === 'singleScorer' ? 'single' : (route === 'trainingRun' || route === 'trainingSetup' ? 'training' : route));
   return `<button data-route="${id}" class="${activeRoute === id ? 'active' : ''}"><span class="ico">${icon}</span>${label}</button>`;
 }
 
@@ -678,6 +729,7 @@ function render() {
           ${navButton('dashboard','⌂','Pulpit aktywnej')}
           ${navButton('competition','♟','Konfiguracja')}
           ${navButton('matches','◉','Mecze')}
+          ${navButton('live','●','Na żywo')}
           ${navButton('single','◎','Pojedynczy mecz')}
           ${navButton('training','◈','Trening')}
           ${navButton('tables','▦','Tabele')}
@@ -706,6 +758,7 @@ function render() {
         ${mobileNav('home','☷','Rozgrywki')}
         ${mobileNav('dashboard','⌂','Pulpit')}
         ${mobileNav('matches','◉','Mecze')}
+        ${mobileNav('live','●','Live')}
         ${mobileNav('single','◎','1 mecz')}
         ${mobileNav('training','◈','Trening')}
         ${mobileNav('tables','▦','Tabela')}
@@ -723,7 +776,7 @@ function render() {
 }
 
 function mobileNav(id, icon, label) {
-  const activeRoute = route === 'scorer' ? 'matches' : (route === 'singleScorer' ? 'single' : (route === 'trainingRun' || route === 'trainingSetup' ? 'training' : route));
+  const activeRoute = route === 'scorer' ? 'live' : (route === 'singleScorer' ? 'single' : (route === 'trainingRun' || route === 'trainingSetup' ? 'training' : route));
   return `<button data-route="${id}" class="${activeRoute === id ? 'active' : ''}"><span>${icon}</span>${label}</button>`;
 }
 
@@ -732,6 +785,7 @@ function renderRoute() {
     case 'home': return renderHome();
     case 'competition': return renderCompetition();
     case 'matches': return renderMatches();
+    case 'live': return renderLiveCenter();
     case 'single': return renderSingleMatch();
     case 'singleScorer': return renderScorer();
     case 'training': return renderTraining();
@@ -864,7 +918,7 @@ function renderCompetition() {
   const groups = groupNames();
   const hasSchedule = state.matches.length > 0;
   const completedMatches = state.matches.filter(m => m.status === 'completed' && !m.bye).length;
-  const liveMatches = state.matches.filter(m => m.status === 'live' && !m.bye).length + (state.live ? 1 : 0);
+  const liveMatches = state.matches.filter(m => m.status === 'live' && !m.bye).length;
   const canRegenerate = hasSchedule && completedMatches === 0 && liveMatches === 0;
   const format = state.settings.format;
   const structureLocked = hasSchedule;
@@ -929,13 +983,144 @@ function playerRow(p, index, groups) {
   </div></div>`;
 }
 
+function competitionPlayerName(competition, id) {
+  return competition?.players?.find(player => player.id === id)?.name || 'Zawodnik';
+}
+
+function genericLiveStats(live, playerId) {
+  const visits = (live?.visits || []).filter(visit => visit.playerId === playerId);
+  const totalScore = visits.reduce((sum, visit) => sum + Number(visit.score || 0), 0);
+  const totalDarts = visits.reduce((sum, visit) => sum + Number(visit.darts || 0), 0);
+  const last = visits.length ? (visits.at(-1).bust ? 'BUST' : visits.at(-1).score) : '—';
+  return {average: totalDarts ? totalScore / totalDarts * 3 : 0, darts: totalDarts, last};
+}
+
+function allLiveEntries() {
+  const entries = [];
+  (hub.competitions || []).forEach(competition => {
+    (competition.matches || []).filter(match => match.status === 'live' && !match.bye).forEach(match => {
+      const isCurrent = competition.id === state.id && state.live?.matchId === match.id;
+      const live = isCurrent ? state.live : match.liveData;
+      if (!live) return;
+      const roundLabel = match.bracketRound
+        ? knockoutStageLabel(match.stageKey)
+        : match.group
+          ? `Grupa ${match.group} · kolejka ${match.round || 1}`
+          : `Kolejka ${match.round || 1}`;
+      entries.push({
+        key:`competition:${competition.id}:${match.id}`,
+        kind:'competition',
+        competitionId:competition.id,
+        matchId:match.id,
+        title:competition.settings?.competitionName || 'Rozgrywka',
+        subtitle:`${formatLabel(competition.settings?.format)} · ${roundLabel}`,
+        rules:`Pierwszy do ${live.legsToWin || matchLegsToWin(match, competition.settings)} legów`,
+        live,
+        playerAName:competitionPlayerName(competition, live.playerA),
+        playerBName:competitionPlayerName(competition, live.playerB),
+        updatedAt:live.updatedAt || competition.updatedAt || live.startedAt
+      });
+    });
+  });
+  if (hub.singleLive) {
+    const live = hub.singleLive;
+    entries.push({
+      key:`single:${live.matchId}`,
+      kind:'single',
+      title:live.title || 'Pojedynczy mecz',
+      subtitle:'Pojedynczy mecz',
+      rules:`Pierwszy do ${live.legsToWin || 1} legów`,
+      live,
+      playerAName:live.playerNames?.[live.playerA] || 'Gracz 1',
+      playerBName:live.playerNames?.[live.playerB] || 'Gracz 2',
+      updatedAt:live.updatedAt || live.startedAt
+    });
+  }
+  if (hub.trainingLive?.type === 'dartbot' && hub.trainingLive.data) {
+    const live = hub.trainingLive.data;
+    entries.push({
+      key:`dartbot:${hub.trainingLive.id}`,
+      kind:'training',
+      title:'501 przeciwko Dartbotowi',
+      subtitle:'Trening meczowy',
+      rules:`Sesja ${Number(hub.trainingLive.settings?.legsCount) || 5} legów`,
+      live,
+      playerAName:hub.trainingLive.playerName || 'Zawodnik',
+      playerBName:`Dartbot +${Number(hub.trainingLive.settings?.botAdvantagePct) || 0}%`,
+      updatedAt:live.updatedAt || hub.trainingLive.startedAt
+    });
+  }
+  return entries.sort((a,b)=>String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
+}
+
+function liveKindLabel(kind) {
+  return kind === 'competition' ? 'Liga / turniej' : kind === 'single' ? 'Pojedynczy mecz' : 'Trening';
+}
+
+function liveEntryCard(entry) {
+  const live = entry.live;
+  const statsA = genericLiveStats(live, live.playerA);
+  const statsB = genericLiveStats(live, live.playerB);
+  const currentA = live.currentPlayerId === live.playerA;
+  const currentB = live.currentPlayerId === live.playerB;
+  const action = entry.kind === 'competition'
+    ? `<button class="live-open-btn" data-live-competition="${entry.competitionId}" data-live-match="${entry.matchId}" aria-label="Otwórz punktację">▶</button>`
+    : entry.kind === 'single'
+      ? `<button class="live-open-btn" data-live-single aria-label="Otwórz punktację">▶</button>`
+      : `<button class="live-open-btn" data-live-training aria-label="Otwórz trening">▶</button>`;
+  return `<article class="live-match-card">
+    <div class="live-match-head"><div><span class="live-dot">LIVE</span><strong>${esc(entry.rules)}</strong></div><span>${esc(entry.title)}</span></div>
+    <div class="live-match-context"><span>${esc(entry.subtitle)}</span><small>${live.startScore || 501} · Leg ${live.legNumber || 1}</small></div>
+    <div class="live-player-row ${currentA?'throwing':''}"><div class="live-player-main"><i></i><strong>${esc(entry.playerAName)}</strong><small>śr. ${fmt(statsA.average)} · ostatnia ${statsA.last}</small></div><b>${live.legs?.[live.playerA] || 0}</b><em>${live.remaining?.[live.playerA] ?? live.startScore ?? 501}</em></div>
+    <div class="live-player-row ${currentB?'throwing':''}"><div class="live-player-main"><i></i><strong>${esc(entry.playerBName)}</strong><small>śr. ${fmt(statsB.average)} · ostatnia ${statsB.last}</small></div><b>${live.legs?.[live.playerB] || 0}</b><em>${live.remaining?.[live.playerB] ?? live.startScore ?? 501}</em>${action}</div>
+    <div class="live-match-foot"><span>${liveKindLabel(entry.kind)}</span><small>Aktualizacja: ${formatDateTime(entry.updatedAt)}</small></div>
+  </article>`;
+}
+
+function renderLiveCenter() {
+  const all = allLiveEntries();
+  const filters = [['all','Wszystkie'],['competition','Liga i turniej'],['single','Pojedyncze'],['training','Trening']];
+  const phrase = liveSearch.trim().toLocaleLowerCase('pl');
+  const entries = all.filter(entry => (liveFilter === 'all' || entry.kind === liveFilter) && (!phrase || `${entry.title} ${entry.subtitle} ${entry.playerAName} ${entry.playerBName}`.toLocaleLowerCase('pl').includes(phrase)));
+  const competitions = new Set(all.filter(entry=>entry.kind==='competition').map(entry=>entry.competitionId)).size;
+  return `${pageHeader('Centrum wyników', 'Wyniki na żywo', 'Podgląd wszystkich rozpoczętych meczów, bieżących legów, pozostałych punktów oraz średnich zawodników.', `<button class="btn ghost" id="refreshLive">Odśwież</button>`)}
+    <div class="grid stats live-stats">
+      ${statCard('Mecze LIVE', all.length, all.length===1?'1 aktywna tarcza':'aktywne punktacje')}
+      ${statCard('Rozgrywki', competitions, 'z meczami w toku')}
+      ${statCard('Zawodnicy', all.length*2, 'obecnie przy tarczach')}
+      ${statCard('Tryb', 'Lokalny', 'dane zapisane na tym urządzeniu')}
+    </div>
+    <section class="card compact live-toolbar">
+      <form id="liveSearchForm" class="live-search-form"><input name="search" value="${esc(liveSearch)}" placeholder="Szukaj zawodnika, ligi albo turnieju"><button class="btn info" type="submit">Szukaj</button>${liveSearch?'<button class="btn ghost" type="button" id="clearLiveSearch">Wyczyść</button>':''}</form>
+      <div class="tabs live-tabs">${filters.map(([id,label])=>`<button class="tab ${liveFilter===id?'active':''}" data-live-filter="${id}">${label} <span class="muted">${id==='all'?all.length:all.filter(entry=>entry.kind===id).length}</span></button>`).join('')}</div>
+    </section>
+    ${entries.length ? `<section class="live-board">${entries.map(liveEntryCard).join('')}</section>` : `<section class="card">${empty(all.length?'Brak dopasowanych meczów':'Brak meczów na żywo',all.length?'Zmień filtr albo wyszukiwanie.':'Rozpocznij punktację z terminarza, pojedynczego meczu lub treningu z Dartbotem.')}</section>`}
+    <div class="note live-sync-note"><strong>Wiele meczów w jednej rozgrywce:</strong> możesz rozpocząć kolejne spotkanie bez usuwania wcześniejszego. Każdy mecz zachowuje własną punktację i można go otworzyć z tej zakładki. Obecna wersja agreguje dane zapisane na tym urządzeniu; równoczesny podgląd wyników z kilku telefonów lub tabletów wymaga wspólnej bazy Firebase.</div>`;
+}
+
+function openCompetitionLive(competitionId, matchId) {
+  saveState();
+  const competition = hub.competitions.find(item => item.id === competitionId);
+  if (!competition) return toast('Nie znaleziono rozgrywki');
+  hub.activeCompetitionId = competition.id;
+  state = competition;
+  const match = state.matches.find(item => item.id === matchId);
+  if (!match) return toast('Nie znaleziono meczu');
+  state.live = normalizeCompetitionLive(match.liveData || (state.live?.matchId===matchId ? state.live : null), match, state.settings) || createLive(match);
+  match.liveData = clone(state.live);
+  match.status = 'live';
+  saveState();
+  route = 'scorer';
+  render();
+}
+
 function renderMatches() {
   const matches = filteredMatches();
   const filters = [
     ['all','Wszystkie'],['planned','Do rozegrania'],['live','W trakcie'],['completed','Wyniki']
   ];
   return `
-    ${pageHeader('Terminarz', 'Mecze', 'Rozpocznij punktację 501 albo wpisz wynik ręcznie.', state.live ? '<button class="btn primary" id="resumeLive">Wróć do aktywnego meczu</button>' : '')}
+    ${pageHeader('Terminarz', 'Mecze', 'Rozpocznij kilka punktacji równolegle albo wpisz wynik ręcznie.', allLiveEntries().some(entry=>entry.kind==='competition') ? '<button class="btn primary" data-route="live">Wyniki na żywo</button>' : '')}
     <div class="tabs">${filters.map(([id,label])=>`<button class="tab ${matchFilter===id?'active':''}" data-match-filter="${id}">${label} <span class="muted">${countFilter(id)}</span></button>`).join('')}</div>
     <section class="card">
       ${matches.length ? `<div class="match-list">${matches.map(matchRow).join('')}</div>` : empty('Brak meczów w tym widoku','Zmień filtr albo wygeneruj terminarz.')}
@@ -967,7 +1152,7 @@ function matchRow(m) {
   const group = m.group ? ` · Grupa ${esc(m.group)}` : '';
   const target = ` · do ${matchLegsToWin(m)} legów`;
   const result = m.status === 'completed' ? `<span class="score-pill">${m.legsA}:${m.legsB}</span>` : '<span class="muted">vs</span>';
-  const startLabel = m.status === 'live' ? 'Wznów' : 'Licz punkty';
+  const startLabel = m.status === 'live' ? 'Otwórz LIVE' : 'Licz punkty';
   return `<div class="match-row"><div><div class="match-meta">${roundLabel}${group}${target}</div>${statusBadge(m.status)}</div><div class="match-pair"><span class="${m.winnerId===m.playerA?'winner':''}">${esc(a)}</span>${result}<span class="${m.winnerId===m.playerB?'winner':''}">${esc(b)}</span></div><div class="row-actions">
     ${m.status !== 'completed' ? `<button class="btn small primary start-match" data-id="${m.id}">${startLabel}</button><button class="btn small ghost manual-result" data-id="${m.id}">Wpisz wynik</button>` : `<button class="btn small ghost reopen-match" data-id="${m.id}">Popraw</button>`}
   </div></div>`;
@@ -1459,7 +1644,7 @@ function renderScorer() {
   const locked = evaluation.bust || evaluation.checkout || pending.length >= 3 || !playerCanThrow;
   const canSubmit = playerCanThrow && (evaluation.bust || evaluation.checkout || pending.length === 3);
   const submitLabel = evaluation.checkout ? 'Zatwierdź checkout' : (evaluation.bust ? 'Zatwierdź BUST' : 'Zatwierdź wizytę');
-  const backRoute = standalone ? 'single' : (dartbotTraining ? 'training' : 'matches');
+  const backRoute = standalone ? 'single' : (dartbotTraining ? 'training' : 'live');
   const contextLabel = standalone
     ? `${live.doubleOut !== false ? 'Double Out' : 'Straight Out'} · pojedynczy mecz`
     : dartbotTraining
@@ -1581,6 +1766,13 @@ function bindCurrentPage() {
   $$('.edit-player').forEach(b=>b.addEventListener('click',()=>editPlayer(b.dataset.id)));
   $$('.player-group-select').forEach(s=>s.addEventListener('change',()=>changePlayerGroup(s.dataset.playerId,s.value)));
   $$('[data-match-filter]').forEach(b=>b.addEventListener('click',()=>{matchFilter=b.dataset.matchFilter;render();}));
+  $$('[data-live-filter]').forEach(b=>b.addEventListener('click',()=>{liveFilter=b.dataset.liveFilter;render();}));
+  $('#liveSearchForm')?.addEventListener('submit',event=>{event.preventDefault();liveSearch=String(new FormData(event.currentTarget).get('search')||'');render();});
+  $('#clearLiveSearch')?.addEventListener('click',()=>{liveSearch='';render();});
+  $('#refreshLive')?.addEventListener('click',()=>render());
+  $$('[data-live-competition]').forEach(b=>b.addEventListener('click',()=>openCompetitionLive(b.dataset.liveCompetition,b.dataset.liveMatch)));
+  $('[data-live-single]')?.addEventListener('click',()=>{route='singleScorer';render();});
+  $('[data-live-training]')?.addEventListener('click',()=>{route='trainingRun';render();});
   $$('.start-match').forEach(b=>b.addEventListener('click',()=>startMatch(b.dataset.id)));
   $$('.manual-result').forEach(b=>b.addEventListener('click',()=>manualResult(b.dataset.id)));
   $$('.reopen-match').forEach(b=>b.addEventListener('click',()=>reopenMatch(b.dataset.id)));
@@ -2236,8 +2428,9 @@ function deleteSingleMatch(id) {
 function startMatch(id) {
   if (!ensureCompetitionOpen()) return;
   const match=state.matches.find(m=>m.id===id); if(!match) return;
-  if(state.live && state.live.matchId!==id && !confirm('Inny mecz jest rozpoczęty. Zastąpić go nowym meczem?')) return;
-  if(!state.live || state.live.matchId!==id) state.live=createLive(match);
+  syncActiveCompetitionLive();
+  state.live = normalizeCompetitionLive(match.liveData || (state.live?.matchId===id ? state.live : null), match, state.settings) || createLive(match);
+  match.liveData = clone(state.live);
   match.status='live';
   saveState(); route='scorer'; render();
 }
@@ -2251,7 +2444,7 @@ function createLive(match) {
     startScore,legsToWin,doubleOut:state.settings.doubleOut!==false,
     remaining:{[match.playerA]:startScore,[match.playerB]:startScore},
     legs:{[match.playerA]:0,[match.playerB]:0},legNumber:1,visits:[],legRecords:[],undo:[],
-    pendingDarts:[],pendingSegment:null,pendingMultiplier:'S',startedAt:new Date().toISOString()
+    pendingDarts:[],pendingSegment:null,pendingMultiplier:'S',startedAt:new Date().toISOString(),updatedAt:new Date().toISOString()
   };
 }
 
@@ -2267,7 +2460,7 @@ function manualResult(id) {
     if(la===lb) return toast('W fazie pucharowej nie może być remisu');
     if(Math.max(la,lb)!==target || Math.min(la,lb)>=target) return toast(`Zwycięzca tego etapu musi zdobyć dokładnie ${target} legów`);
   }
-  match.legsA=la;match.legsB=lb;match.status='completed';match.winnerId=la===lb?null:(la>lb?match.playerA:match.playerB);match.stats=null;match.completedAt=new Date().toISOString();
+  match.legsA=la;match.legsB=lb;match.status='completed';match.winnerId=la===lb?null:(la>lb?match.playerA:match.playerB);match.stats=null;match.completedAt=new Date().toISOString();match.liveData=null;
   if(state.live?.matchId===id) state.live=null;
   const progress=progressCompetition();
   saveState();render();
@@ -2290,7 +2483,7 @@ function reopenMatch(id) {
     state.matches=state.matches.filter(m=>!m.bracketRound || (m.bracketRound||0)<=(match.bracketRound||0));
     state.knockout={...(state.knockout||{}),status:'active',championId:null,completedAt:null};
   }
-  match.status='planned';match.legsA=0;match.legsB=0;match.winnerId=null;match.stats=null;delete match.completedAt;
+  match.status='planned';match.legsA=0;match.legsB=0;match.winnerId=null;match.stats=null;match.liveData=null;delete match.completedAt;
   saveState();render();
 }
 
@@ -2679,6 +2872,7 @@ function submitScore(event) {
   live.pendingDarts=[];
   live.pendingSegment=null;
   live.pendingMultiplier='S';
+  live.updatedAt=new Date().toISOString();
   if(!evaluation.bust)live.remaining[pid]=evaluation.remainingAfter;
   if(evaluation.checkout){
     const winnerDarts=live.visits.filter(v=>v.leg===live.legNumber&&v.playerId===pid).reduce((sum,v)=>sum+v.darts,0);
@@ -2750,9 +2944,10 @@ function finalizeLiveMatch(winnerId) {
     [live.playerA]:summarizeLivePlayer(live.playerA,live),
     [live.playerB]:summarizeLivePlayer(live.playerB,live)
   };
+  match.liveData=null;
   state.live=null;
   const progress=progressCompetition();
-  saveState();route='matches';render();
+  saveState();route=allLiveEntries().length?'live':'matches';render();
   if(progress==='knockout-created') toast('Mecz zakończony. Grupy zamknięte — utworzono fazę pucharową');
   else if(progress==='knockout-completed') toast(`Turniej wygrywa ${playerName(winnerId)}`);
   else toast(`Mecz wygrywa ${playerName(winnerId)}`);
@@ -3242,8 +3437,7 @@ async function installApp() {
 
 window.addEventListener('beforeinstallprompt',event=>{event.preventDefault();deferredInstallPrompt=event;updateInstallButton();});
 window.addEventListener('appinstalled',()=>{deferredInstallPrompt=null;toast('Aplikacja została zainstalowana');});
-
-if('serviceWorker' in navigator){window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js?v=1.5.1').catch(console.error));}
+if('serviceWorker' in navigator){window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js?v=1.6.0').catch(console.error));}
 
 if (progressCompetition()) saveState();
 render();

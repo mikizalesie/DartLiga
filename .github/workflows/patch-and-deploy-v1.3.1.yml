@@ -1,0 +1,754 @@
+name: Poprawka i publikacja DartLiga 1.3.1
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: dartliga-patch-pages
+  cancel-in-progress: true
+
+jobs:
+  patch-and-deploy:
+    runs-on: ubuntu-latest
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Pobierz repozytorium
+        uses: actions/checkout@v6
+
+      - name: Popraw licznik
+        shell: bash
+        run: |
+          python <<'PY'
+          from pathlib import Path
+          import re
+
+          app_path = Path("app.js")
+          css_path = Path("styles.css")
+          index_path = Path("index.html")
+          sw_path = Path("sw.js")
+
+          required = [app_path, css_path, index_path, sw_path]
+          missing = [str(path) for path in required if not path.exists()]
+
+          if missing:
+              raise SystemExit(
+                  "Brakuje plików: " + ", ".join(missing)
+              )
+
+          app = app_path.read_text(encoding="utf-8")
+
+          # ----------------------------------------------------------
+          # Wersja aplikacji
+          # ----------------------------------------------------------
+
+          app, count = re.subn(
+              r"const APP_VERSION = '[^']+';",
+              "const APP_VERSION = '1.3.1';",
+              app,
+              count=1,
+          )
+
+          if count != 1:
+              raise SystemExit(
+                  "Nie znaleziono APP_VERSION w app.js"
+              )
+
+          # ----------------------------------------------------------
+          # selectedSegment w renderScorer
+          # ----------------------------------------------------------
+
+          if "const selectedSegment =" not in app:
+              marker = "  const pending = live.pendingDarts || [];\n"
+
+              if marker not in app:
+                  raise SystemExit(
+                      "Nie znaleziono zmiennej pending w renderScorer"
+                  )
+
+              addition = """  const selectedSegment =
+            Number.isInteger(Number(live.pendingSegment)) &&
+            Number(live.pendingSegment) >= 1 &&
+            Number(live.pendingSegment) <= 20
+              ? Number(live.pendingSegment)
+              : null;
+          """
+
+              app = app.replace(
+                  marker,
+                  marker + addition,
+                  1,
+              )
+
+          # ----------------------------------------------------------
+          # Nowy układ przycisków:
+          # numer -> Singiel / Double / Triple
+          # ----------------------------------------------------------
+
+          if 'class="dart-step-head"' not in app:
+              start_marker = (
+                  '            <div class="multiplier-picker" '
+                  'aria-label="Wybierz mnożnik">'
+              )
+
+              end_marker = (
+                  '            <div class="dart-actions">'
+              )
+
+              start = app.find(start_marker)
+              end = app.find(end_marker, start)
+
+              if start == -1 or end == -1:
+                  raise SystemExit(
+                      "Nie znaleziono sekcji przycisków licznika"
+                  )
+
+              new_controls = r'''            <div class="dart-step-head">
+                <span>1</span>
+                <div>
+                  <strong>Wybierz numer pola</strong>
+                  <small>Najpierw kliknij liczbę od 1 do 20.</small>
+                </div>
+              </div>
+
+              <div class="dart-number-grid" aria-label="Wybierz numer pola">
+                ${Array.from({length:20},(_,i)=>i+1).map(value=>`
+                  <button
+                    type="button"
+                    class="dart-number ${selectedSegment===value?'selected':''}"
+                    data-segment="${value}"
+                    ${locked?'disabled':''}
+                  >
+                    ${value}
+                  </button>
+                `).join('')}
+              </div>
+
+              <div class="dart-step-head second-step">
+                <span>2</span>
+                <div>
+                  <strong>Wybierz rodzaj trafienia</strong>
+                  <small>
+                    ${selectedSegment
+                      ? `Wybrane pole: ${selectedSegment}`
+                      : 'Najpierw wybierz numer pola.'}
+                  </small>
+                </div>
+              </div>
+
+              <div class="multiplier-picker" aria-label="Wybierz rodzaj trafienia">
+                ${[
+                  ['S','Singiel',1],
+                  ['D','Double',2],
+                  ['T','Triple',3]
+                ].map(([code,label,multiplier])=>`
+                  <button
+                    type="button"
+                    class="multiplier-btn"
+                    data-multiplier="${code}"
+                    ${locked||!selectedSegment?'disabled':''}
+                  >
+                    <b>${code}</b>
+                    <span>
+                      ${selectedSegment
+                        ? `${label}: ${selectedSegment * multiplier} pkt`
+                        : label}
+                    </span>
+                  </button>
+                `).join('')}
+              </div>
+
+              <div class="dart-special-label">
+                Bull lub pudło
+              </div>
+
+              <div class="dart-special-grid">
+                <button
+                  type="button"
+                  class="dart-special"
+                  data-special="S25"
+                  ${locked?'disabled':''}
+                >
+                  <b>25</b>
+                  <span>Outer Bull</span>
+                </button>
+
+                <button
+                  type="button"
+                  class="dart-special"
+                  data-special="DBULL"
+                  ${locked?'disabled':''}
+                >
+                  <b>50</b>
+                  <span>Bull</span>
+                </button>
+
+                <button
+                  type="button"
+                  class="dart-special miss"
+                  data-special="MISS"
+                  ${locked?'disabled':''}
+                >
+                  <b>0</b>
+                  <span>Pudło</span>
+                </button>
+              </div>
+
+          '''
+
+              app = (
+                  app[:start]
+                  + new_controls
+                  + app[end:]
+              )
+
+          # ----------------------------------------------------------
+          # Przyciski cofania i czyszczenia
+          # ----------------------------------------------------------
+
+          app = app.replace(
+              """id="undoDart" ${pending.length?'':'disabled'}""",
+              """id="undoDart" ${(pending.length||selectedSegment)?'':'disabled'}""",
+          )
+
+          app = app.replace(
+              """id="clearDarts" ${pending.length?'':'disabled'}""",
+              """id="clearDarts" ${(pending.length||selectedSegment)?'':'disabled'}""",
+          )
+
+          # ----------------------------------------------------------
+          # Instrukcja
+          # ----------------------------------------------------------
+
+          old_note = (
+              "Wybierz Singiel, Double albo Triple, a następnie "
+              "numer pola. Bull i pudło mają osobne przyciski. "
+              "Przy checkout liczba użytych lotek jest liczona "
+              "automatycznie. Obowiązuje zakończenie na double "
+              "lub Bull 50."
+          )
+
+          new_note = (
+              "Najpierw wybierz numer pola, a następnie Singiel, "
+              "Double albo Triple. Trzecia lotka automatycznie "
+              "zapisuje wizytę, odejmuje punkty i przełącza "
+              "zawodnika. Checkout i BUST również zapisują się "
+              "automatycznie. Przed trzecią lotką możesz cofnąć "
+              "lotkę albo wyczyścić wizytę."
+          )
+
+          if old_note in app:
+              app = app.replace(
+                  old_note,
+                  new_note,
+                  1,
+              )
+
+          # ----------------------------------------------------------
+          # Obsługa kliknięć
+          # ----------------------------------------------------------
+
+          old_multiplier_binding = (
+              "  $$('.multiplier-btn').forEach("
+              "b=>b.addEventListener('click',"
+              "()=>selectDartMultiplier(b.dataset.multiplier)));"
+          )
+
+          new_multiplier_binding = (
+              "  $$('.multiplier-btn').forEach("
+              "b=>b.addEventListener('click',"
+              "()=>addPendingDart(b.dataset.multiplier)));"
+          )
+
+          old_number_binding = (
+              "  $$('.dart-number').forEach("
+              "b=>b.addEventListener('click',"
+              "()=>addPendingDart(Number(b.dataset.segment))));"
+          )
+
+          new_number_binding = (
+              "  $$('.dart-number').forEach("
+              "b=>b.addEventListener('click',"
+              "()=>selectDartSegment(Number(b.dataset.segment))));"
+          )
+
+          if old_multiplier_binding in app:
+              app = app.replace(
+                  old_multiplier_binding,
+                  new_multiplier_binding,
+                  1,
+              )
+
+          if old_number_binding in app:
+              app = app.replace(
+                  old_number_binding,
+                  new_number_binding,
+                  1,
+              )
+
+          # ----------------------------------------------------------
+          # Nowa logika lotek
+          # ----------------------------------------------------------
+
+          if "function selectDartSegment(segment)" not in app:
+              start_marker = (
+                  "function selectDartMultiplier(multiplier) {"
+              )
+
+              end_marker = (
+                  "function undoPendingDart() {"
+              )
+
+              start = app.find(start_marker)
+              end = app.find(end_marker, start)
+
+              if start == -1 or end == -1:
+                  raise SystemExit(
+                      "Nie znaleziono funkcji obsługi lotek"
+                  )
+
+              new_functions = r'''function selectDartSegment(segment) {
+            const live = state.live;
+
+            if (!live) return;
+
+            const evaluation = evaluatePendingVisit(live);
+
+            if (
+              evaluation.bust ||
+              evaluation.checkout ||
+              (live.pendingDarts || []).length >= 3
+            ) {
+              return;
+            }
+
+            const value = Number(segment);
+
+            if (
+              !Number.isInteger(value) ||
+              value < 1 ||
+              value > 20
+            ) {
+              return;
+            }
+
+            live.pendingSegment = value;
+
+            saveState();
+            render();
+          }
+
+          function autoSubmitPendingVisit() {
+            const live = state.live;
+
+            if (!live) return false;
+
+            const evaluation = evaluatePendingVisit(live);
+            const dartsCount = (
+              live.pendingDarts || []
+            ).length;
+
+            const shouldSubmit =
+              evaluation.bust ||
+              evaluation.checkout ||
+              dartsCount >= 3;
+
+            if (!shouldSubmit) {
+              return false;
+            }
+
+            /*
+             * Zapisujemy trzecią lotkę w pamięci i pokazujemy ją
+             * na ekranie. Następnie zatwierdzamy całą wizytę.
+             */
+            saveState();
+            render();
+
+            setTimeout(() => {
+              submitScore({
+                preventDefault() {}
+              });
+            }, 0);
+
+            return true;
+          }
+
+          function addPendingDart(multiplier) {
+            const live = state.live;
+
+            if (
+              !live ||
+              !['S','D','T'].includes(multiplier)
+            ) {
+              return;
+            }
+
+            const evaluation = evaluatePendingVisit(live);
+
+            if (
+              evaluation.bust ||
+              evaluation.checkout ||
+              (live.pendingDarts || []).length >= 3
+            ) {
+              return;
+            }
+
+            const value = Number(live.pendingSegment);
+
+            if (
+              !Number.isInteger(value) ||
+              value < 1 ||
+              value > 20
+            ) {
+              return toast(
+                'Najpierw wybierz numer pola'
+              );
+            }
+
+            live.pendingDarts =
+              live.pendingDarts || [];
+
+            live.pendingDarts.push(
+              dartFromParts(value, multiplier)
+            );
+
+            live.pendingSegment = null;
+
+            if (autoSubmitPendingVisit()) {
+              return;
+            }
+
+            saveState();
+            render();
+          }
+
+          function addSpecialDart(code) {
+            const live = state.live;
+
+            if (!live) return;
+
+            const evaluation = evaluatePendingVisit(live);
+
+            if (
+              evaluation.bust ||
+              evaluation.checkout ||
+              (live.pendingDarts || []).length >= 3
+            ) {
+              return;
+            }
+
+            live.pendingDarts =
+              live.pendingDarts || [];
+
+            live.pendingSegment = null;
+
+            live.pendingDarts.push(
+              specialDart(code)
+            );
+
+            if (autoSubmitPendingVisit()) {
+              return;
+            }
+
+            saveState();
+            render();
+          }
+
+          '''
+
+              app = (
+                  app[:start]
+                  + new_functions
+                  + app[end:]
+              )
+
+          # ----------------------------------------------------------
+          # Cofnięcie lotki i wyczyszczenie wizyty
+          # ----------------------------------------------------------
+
+          if (
+              "live.pendingSegment !== null"
+              not in app
+          ):
+              start_marker = (
+                  "function undoPendingDart() {"
+              )
+
+              end_marker = (
+                  "function submitScore(event) {"
+              )
+
+              start = app.find(start_marker)
+              end = app.find(end_marker, start)
+
+              if start == -1 or end == -1:
+                  raise SystemExit(
+                      "Nie znaleziono funkcji cofania wizyty"
+                  )
+
+              new_undo_clear = r'''function undoPendingDart() {
+            const live = state.live;
+
+            if (!live) return;
+
+            if (
+              live.pendingSegment !== null &&
+              live.pendingSegment !== undefined
+            ) {
+              live.pendingSegment = null;
+
+              saveState();
+              render();
+
+              return;
+            }
+
+            if (!live.pendingDarts?.length) {
+              return;
+            }
+
+            live.pendingDarts.pop();
+
+            saveState();
+            render();
+          }
+
+          function clearPendingDarts() {
+            const live = state.live;
+
+            if (!live) return;
+
+            live.pendingDarts = [];
+            live.pendingSegment = null;
+
+            saveState();
+            render();
+          }
+
+          '''
+
+              app = (
+                  app[:start]
+                  + new_undo_clear
+                  + app[end:]
+              )
+
+          # ----------------------------------------------------------
+          # Czyszczenie wybranego numeru po zapisaniu wizyty
+          # ----------------------------------------------------------
+
+          reset_old = """  live.pendingDarts=[];
+            live.pendingMultiplier='S';"""
+
+          reset_new = """  live.pendingDarts=[];
+            live.pendingSegment=null;
+            live.pendingMultiplier='S';"""
+
+          if reset_old in app:
+              app = app.replace(
+                  reset_old,
+                  reset_new,
+                  1,
+              )
+
+          # ----------------------------------------------------------
+          # Kontrola poprawności
+          # ----------------------------------------------------------
+
+          expected = [
+              "const APP_VERSION = '1.3.1';",
+              "const selectedSegment =",
+              "function selectDartSegment(segment)",
+              "function autoSubmitPendingVisit()",
+              "function addPendingDart(multiplier)",
+              "function addSpecialDart(code)",
+              "live.pendingSegment = value;",
+              "if (autoSubmitPendingVisit())",
+              "Trzecia lotka automatycznie",
+          ]
+
+          missing_expected = [
+              fragment
+              for fragment in expected
+              if fragment not in app
+          ]
+
+          if missing_expected:
+              raise SystemExit(
+                  "Brak wymaganych zmian: "
+                  + " | ".join(missing_expected)
+              )
+
+          app_path.write_text(
+              app,
+              encoding="utf-8",
+          )
+
+          # ----------------------------------------------------------
+          # Style
+          # ----------------------------------------------------------
+
+          css = css_path.read_text(encoding="utf-8")
+
+          css_marker = (
+              "/* DartLiga 1.3.1 - number first */"
+          )
+
+          if css_marker not in css:
+              css += r'''
+
+          /* DartLiga 1.3.1 - number first */
+
+          .dart-step-head{
+            display:flex;
+            align-items:center;
+            gap:10px;
+            margin:12px 0 9px;
+          }
+
+          .dart-step-head.second-step{
+            margin-top:16px;
+          }
+
+          .dart-step-head>span{
+            width:30px;
+            height:30px;
+            flex:0 0 30px;
+            display:grid;
+            place-items:center;
+            border-radius:50%;
+            background:var(--info);
+            color:#082f49;
+            font-weight:950;
+          }
+
+          .dart-step-head>div{
+            display:grid;
+            gap:2px;
+          }
+
+          .dart-step-head strong{
+            font-size:14px;
+          }
+
+          .dart-step-head small{
+            color:var(--muted);
+            font-size:11px;
+          }
+
+          .dart-number.selected{
+            border-color:var(--primary);
+            background:rgba(34,197,94,.2);
+            color:#dcfce7;
+            box-shadow:
+              0 0 0 3px rgba(34,197,94,.12);
+          }
+
+          .dart-special-label{
+            margin-top:14px;
+            color:var(--muted);
+            font-size:11px;
+            font-weight:900;
+            text-transform:uppercase;
+            letter-spacing:.08em;
+          }
+          '''
+
+          css_path.write_text(
+              css,
+              encoding="utf-8",
+          )
+
+          # ----------------------------------------------------------
+          # Odświeżenie wersji plików
+          # ----------------------------------------------------------
+
+          index = index_path.read_text(
+              encoding="utf-8"
+          )
+
+          index = re.sub(
+              r"styles\.css\?v=[^\"']+",
+              "styles.css?v=1.3.1",
+              index,
+          )
+
+          index = re.sub(
+              r"app\.js\?v=[^\"']+",
+              "app.js?v=1.3.1",
+              index,
+          )
+
+          index_path.write_text(
+              index,
+              encoding="utf-8",
+          )
+
+          sw = sw_path.read_text(
+              encoding="utf-8"
+          )
+
+          sw = re.sub(
+              r"dartliga-pwa-v[^']+",
+              "dartliga-pwa-v1.3.1",
+              sw,
+              count=1,
+          )
+
+          sw = re.sub(
+              r"styles\.css\?v=[^\"']+",
+              "styles.css?v=1.3.1",
+              sw,
+          )
+
+          sw = re.sub(
+              r"app\.js\?v=[^\"']+",
+              "app.js?v=1.3.1",
+              sw,
+          )
+
+          sw_path.write_text(
+              sw,
+              encoding="utf-8",
+          )
+
+          print("DartLiga 1.3.1 przygotowana poprawnie.")
+          PY
+
+      - name: Sprawdź składnię JavaScript
+        run: node --check app.js
+
+      - name: Zapisz zmiany w repozytorium
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add app.js styles.css index.html sw.js
+
+          if git diff --cached --quiet; then
+            echo "Pliki są już zaktualizowane."
+          else
+            git commit -m "DartLiga 1.3.1 - poprawa licznika"
+            git push
+          fi
+
+      - name: Skonfiguruj GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Przygotuj pliki strony
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: .
+
+      - name: Opublikuj stronę
+        id: deployment
+        uses: actions/deploy-pages@v4

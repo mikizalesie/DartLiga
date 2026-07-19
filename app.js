@@ -2,7 +2,7 @@
 
 const LEGACY_STORAGE_KEY = 'dartliga_pwa_state_v1';
 const STORAGE_KEY = 'dartliga_pwa_hub_v2';
-const APP_VERSION = '1.7.2';
+const APP_VERSION = '1.8.0';
 let route = 'home';
 let matchFilter = 'all';
 let tableGroup = 'all';
@@ -13,6 +13,12 @@ let deferredInstallPrompt = null;
 let newCompetitionPanelOpen = false;
 let trainingSetupType = null;
 let dartbotTimer = null;
+let tabletBoardNumber = 1;
+let tabletMode = null;
+let tabletCompetitionId = null;
+let tabletRefreshTimer = null;
+const TABLET_ROUTE_BY_MODE = {score:'tabletScore', entry:'tabletEntry', queue:'tabletQueue'};
+const TABLET_MODE_BY_ROUTE = {tabletScore:'score', tabletEntry:'entry', tabletQueue:'queue'};
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -576,6 +582,7 @@ const ROLE_NAVIGATION = {
     ['competition','♟','Konfiguracja'],
     ['matches','◉','Mecze'],
     ['live','●','Na żywo'],
+    ['boardViews','▣','Widoki tarcz'],
     ['tables','▦','Tabele'],
     ['stats','↗','Statystyki'],
     ['settings','⚙','Ustawienia']
@@ -608,7 +615,16 @@ function routePermissionKey(routeName = route) {
   if (routeName === 'scorer') return 'matches';
   if (routeName === 'singleScorer') return 'single';
   if (routeName === 'trainingRun' || routeName === 'trainingSetup') return 'training';
+  if (TABLET_MODE_BY_ROUTE[routeName]) return 'boardViews';
   return routeName;
+}
+
+function isTabletRoute(routeName = route) {
+  return Boolean(TABLET_MODE_BY_ROUTE[routeName]);
+}
+
+function currentTabletMode() {
+  return TABLET_MODE_BY_ROUTE[route] || tabletMode || null;
 }
 
 function isRouteAllowed(routeName = route, role = currentAppRole()) {
@@ -716,6 +732,228 @@ function occupiedBoardsCount(competition = state) {
   return activeBoardNumbers(competition).size;
 }
 
+
+function tabletViewLabel(mode = currentTabletMode()) {
+  return ({score:'Tylko wynik', entry:'Wpisywanie punktów', queue:'Mecze na tarczy'})[mode] || 'Widok tarczy';
+}
+
+function tabletViewUrl(mode, boardNumber, competitionId = state.id) {
+  const url = new URL(window.location.href);
+  url.search = '';
+  url.hash = '';
+  url.searchParams.set('tablet', mode);
+  url.searchParams.set('board', String(boardNumber));
+  url.searchParams.set('competition', competitionId);
+  return url.toString();
+}
+
+function applyStartupTabletView() {
+  const params = new URLSearchParams(window.location.search);
+  const mode = String(params.get('tablet') || '');
+  if (!TABLET_ROUTE_BY_MODE[mode]) return;
+  tabletMode = mode;
+  tabletCompetitionId = String(params.get('competition') || hub.activeCompetitionId || state.id);
+  const competition = hub.competitions.find(item => item.id === tabletCompetitionId);
+  if (competition) {
+    state = competition;
+    hub.activeCompetitionId = competition.id;
+  } else {
+    tabletCompetitionId = state.id;
+  }
+  tabletBoardNumber = validBoardNumber(params.get('board'), state) || 1;
+  hub.appRole = 'organizer';
+  route = TABLET_ROUTE_BY_MODE[mode];
+}
+
+function reloadTabletData() {
+  const refreshed = loadHub();
+  const competitionId = tabletCompetitionId || state?.id || refreshed.activeCompetitionId;
+  hub = refreshed;
+  hub.appRole = 'organizer';
+  state = hub.competitions.find(item => item.id === competitionId)
+    || hub.competitions.find(item => item.id === hub.activeCompetitionId)
+    || hub.competitions[0];
+  tabletCompetitionId = state.id;
+  tabletBoardNumber = validBoardNumber(tabletBoardNumber, state) || 1;
+}
+
+function scheduleTabletRefresh() {
+  clearTimeout(tabletRefreshTimer);
+  if (!isTabletRoute()) return;
+  const current = scorerLive();
+  const hasPendingEntry = route === 'tabletEntry' && (current?.pendingDarts?.length || current?.pendingSegment);
+  if (hasPendingEntry) return;
+  tabletRefreshTimer = setTimeout(() => {
+    if (!isTabletRoute()) return;
+    reloadTabletData();
+    render();
+  }, route === 'tabletEntry' ? 2500 : 1200);
+}
+
+function exitTabletView() {
+  clearTimeout(tabletRefreshTimer);
+  const url = new URL(window.location.href);
+  url.searchParams.delete('tablet');
+  url.searchParams.delete('board');
+  url.searchParams.delete('competition');
+  window.history.replaceState({}, '', url.pathname + url.search + url.hash);
+  tabletMode = null;
+  route = 'boardViews';
+  document.body.classList.remove('tablet-mode');
+  render();
+}
+
+function boardMatches(boardNumber, competition = state) {
+  const board = validBoardNumber(boardNumber, competition) || 1;
+  return (competition.matches || [])
+    .filter(match => !match.bye && validBoardNumber(match.liveData?.boardNumber ?? match.boardNumber, competition) === board)
+    .slice()
+    .sort(matchSort);
+}
+
+function boardCurrentMatch(boardNumber, competition = state) {
+  return boardMatches(boardNumber, competition).find(match => match.status === 'live' && match.liveData) || null;
+}
+
+function boardUpcomingMatches(boardNumber, competition = state) {
+  return boardMatches(boardNumber, competition).filter(match => match.status === 'planned');
+}
+
+function boardNextMatch(boardNumber, competition = state) {
+  return boardUpcomingMatches(boardNumber, competition)[0] || null;
+}
+
+function boardMatchStage(match) {
+  if (!match) return '';
+  if (match.bracketRound) return knockoutStageLabel(match.stageKey);
+  if (match.group) return `Grupa ${match.group} · kolejka ${Math.max(1, Number(match.round) || 1)}`;
+  return `Kolejka ${Math.max(1, Number(match.round) || 1)}`;
+}
+
+function boardMatchNames(match) {
+  return match ? `${playerName(match.playerA)} vs ${playerName(match.playerB)}` : 'Brak meczu';
+}
+
+function prepareTabletEntryLive() {
+  const match = boardCurrentMatch(tabletBoardNumber, state);
+  if (!match?.liveData) {
+    state.live = null;
+    return null;
+  }
+  state.live = clone(match.liveData);
+  return match;
+}
+
+function tabletTopbar(mode = currentTabletMode()) {
+  return `<header class="tablet-controlbar">
+    <div><span>Tarcza ${tabletBoardNumber}</span><strong>${esc(tabletViewLabel(mode))}</strong><small>${esc(state.settings.competitionName)}</small></div>
+    <div class="tablet-control-actions">
+      <button class="btn small ghost" id="tabletRefresh">Odśwież</button>
+      <button class="btn small ghost" id="tabletFullscreen">Pełny ekran</button>
+      <button class="btn small danger" id="tabletExit">Wróć</button>
+    </div>
+  </header>`;
+}
+
+function tabletEmptyState(title, description, nextMatch = null) {
+  return `<section class="tablet-empty-state">
+    <div class="tablet-empty-icon">◎</div>
+    <h1>${esc(title)}</h1>
+    <p>${esc(description)}</p>
+    ${nextMatch ? `<div class="tablet-next-preview"><span>Następny mecz</span><strong>${esc(boardMatchNames(nextMatch))}</strong><small>${esc(boardMatchStage(nextMatch))}</small></div>` : ''}
+  </section>`;
+}
+
+function renderBoardViews() {
+  const boards = Array.from({length:competitionBoardsCount(state)}, (_,index)=>index+1);
+  return `${pageHeader('Stanowiska tabletowe', 'Widoki tarcz', 'Otwórz niezależny widok dla tabletu przy konkretnej tarczy. Każdy widok można uruchomić w osobnej karcie i przełączyć w tryb pełnoekranowy.')}
+    <section class="board-view-grid">
+      ${boards.map(board => {
+        const current = boardCurrentMatch(board);
+        const next = boardNextMatch(board);
+        return `<article class="card board-view-card ${current?'occupied':'free'}">
+          <div class="board-view-card-head"><div><span>Tarcza</span><strong>${board}</strong></div><span class="badge ${current?'red':'green'}">${current?'Mecz w toku':'Wolna'}</span></div>
+          <div class="board-view-match"><span>Mecz obecny</span><strong>${current?esc(boardMatchNames(current)):'Brak aktywnego meczu'}</strong><small>${current?esc(boardMatchStage(current)):'Tablet może pozostać otwarty i poczekać na rozpoczęcie meczu.'}</small></div>
+          <div class="board-view-match next"><span>Mecz następny</span><strong>${next?esc(boardMatchNames(next)):'Brak kolejnego meczu'}</strong><small>${next?esc(boardMatchStage(next)):'Brak spotkań przypisanych do tej tarczy.'}</small></div>
+          <div class="board-view-actions">
+            <a class="btn info" href="${esc(tabletViewUrl('score',board))}" target="_blank" rel="noopener">Tylko wynik</a>
+            <a class="btn primary" href="${esc(tabletViewUrl('entry',board))}" target="_blank" rel="noopener">Wpisywanie punktów</a>
+            <a class="btn ghost" href="${esc(tabletViewUrl('queue',board))}" target="_blank" rel="noopener">Mecze na tarczy</a>
+          </div>
+        </article>`;
+      }).join('')}
+    </section>
+    <div class="note"><strong>Tryb testowy bez synchronizacji internetowej:</strong> widoki odświeżają się automatycznie między kartami tej samej przeglądarki. Osobne fizyczne tablety będą wymagały późniejszego podłączenia Firebase, aby wszystkie urządzenia widziały te same dane w czasie rzeczywistym.</div>`;
+}
+
+function tabletPlayerScore(live, playerId) {
+  const stats = genericLiveStats(live, playerId);
+  const current = live.currentPlayerId === playerId;
+  const starter = live.legStarterId === playerId;
+  return `<div class="tablet-score-player ${current?'active':''}">
+    <div class="tablet-player-icons">${starter?liveStarterGraphic():''}${current?liveTurnGraphic():''}</div>
+    <div class="tablet-player-name">${esc(playerName(playerId))}</div>
+    <div class="tablet-remaining">${live.remaining?.[playerId] ?? live.startScore ?? 501}</div>
+    <div class="tablet-player-stats"><div><b>${fmt(stats.average)}</b><span>średnia</span></div><div><b>${stats.darts}</b><span>lotki</span></div><div><b>${stats.last}</b><span>ostatnia</span></div></div>
+  </div>`;
+}
+
+function renderTabletScore() {
+  const match = boardCurrentMatch(tabletBoardNumber, state);
+  const next = boardNextMatch(tabletBoardNumber, state);
+  if (!match?.liveData) return `${tabletTopbar('score')}${tabletEmptyState(`Tarcza ${tabletBoardNumber} jest wolna`, 'Widok automatycznie pokaże wynik, gdy mecz zostanie rozpoczęty.', next)}`;
+  const live = match.liveData;
+  const setMode = liveUsesSets(live);
+  const checkout = liveCheckoutRoute(live);
+  return `${tabletTopbar('score')}
+    <main class="tablet-score-screen">
+      <div class="tablet-match-heading"><span>${esc(boardMatchStage(match))}</span><h1>${esc(boardMatchNames(match))}</h1><p>${esc(matchRuleText(live.legsToWin || matchLegsToWin(match), live.setsToWin || matchSetsToWin(match)))} · ${live.startScore || matchStartScore(match)}</p></div>
+      <div class="tablet-scoreboard">
+        ${tabletPlayerScore(live, live.playerA)}
+        <div class="tablet-score-center">
+          ${setMode?`<div><span>Sety</span><strong>${live.sets?.[live.playerA]||0} : ${live.sets?.[live.playerB]||0}</strong></div>`:''}
+          <div><span>Legi</span><strong>${live.legs?.[live.playerA]||0} : ${live.legs?.[live.playerB]||0}</strong></div>
+          <small>${setMode?`Set ${live.setNumber||1} · `:''}Leg ${live.legNumber||1}</small>
+        </div>
+        ${tabletPlayerScore(live, live.playerB)}
+      </div>
+      ${checkout?`<div class="tablet-checkout"><span>Checkout</span><strong>${checkout.map(esc).join(' · ')}</strong></div>`:''}
+    </main>`;
+}
+
+function renderTabletEntry() {
+  const match = prepareTabletEntryLive();
+  if (!match) return `${tabletTopbar('entry')}${tabletEmptyState(`Tarcza ${tabletBoardNumber} jest wolna`, 'Po rozpoczęciu meczu na tej tarczy pojawi się pełny panel wpisywania punktów.', boardNextMatch(tabletBoardNumber))}`;
+  return `${tabletTopbar('entry')}<div class="tablet-entry-view">${renderScorer()}</div>`;
+}
+
+function tabletQueueMatch(match, type) {
+  if (!match) return `<div class="tablet-queue-match empty-match"><span>${type}</span><strong>Brak meczu</strong><small>Brak spotkania przypisanego do tej pozycji.</small></div>`;
+  const live = match.liveData;
+  const score = live
+    ? `${liveUsesSets(live)?`Sety ${live.sets?.[live.playerA]||0}:${live.sets?.[live.playerB]||0} · `:''}Legi ${live.legs?.[live.playerA]||0}:${live.legs?.[live.playerB]||0}`
+    : matchRuleText(matchLegsToWin(match), matchSetsToWin(match));
+  return `<div class="tablet-queue-match ${live?'current':''}">
+    <span>${type}</span>
+    <strong>${esc(boardMatchNames(match))}</strong>
+    <small>${esc(boardMatchStage(match))} · ${esc(score)}</small>
+    ${live?`<div class="tablet-queue-points"><b>${live.remaining?.[live.playerA] ?? live.startScore}</b><em>:</em><b>${live.remaining?.[live.playerB] ?? live.startScore}</b></div>`:''}
+  </div>`;
+}
+
+function renderTabletQueue() {
+  const current = boardCurrentMatch(tabletBoardNumber, state);
+  const next = boardNextMatch(tabletBoardNumber, state);
+  return `${tabletTopbar('queue')}
+    <main class="tablet-queue-screen">
+      <div class="tablet-board-number"><span>Tarcza</span><strong>${tabletBoardNumber}</strong><small>${esc(state.settings.competitionName)}</small></div>
+      <div class="tablet-queue-grid">
+        ${tabletQueueMatch(current, 'Mecz obecny')}
+        ${tabletQueueMatch(next, 'Mecz następny')}
+      </div>
+    </main>`;
+}
+
 function requireOrganizer(message = 'Ta funkcja jest dostępna w trybie Organizator') {
   if (isOrganizer()) return true;
   toast(message);
@@ -745,8 +983,32 @@ function scorerPlayerName(id) {
   }
   return playerName(id);
 }
+function saveTabletEntryState() {
+  const currentLive = clone(state.live);
+  if (!currentLive?.matchId) return saveState();
+  const latestHub = loadHub();
+  const competition = latestHub.competitions.find(item => item.id === (tabletCompetitionId || state.id));
+  const match = competition?.matches?.find(item => item.id === currentLive.matchId);
+  if (!competition || !match) return saveState();
+  currentLive.updatedAt = new Date().toISOString();
+  match.liveData = clone(currentLive);
+  match.status = 'live';
+  match.boardNumber = currentLive.boardNumber || match.boardNumber;
+  competition.live = clone(currentLive);
+  competition.updatedAt = currentLive.updatedAt;
+  latestHub.activeCompetitionId = competition.id;
+  latestHub.appRole = 'organizer';
+  latestHub.version = APP_VERSION;
+  latestHub.updatedAt = currentLive.updatedAt;
+  hub = latestHub;
+  state = competition;
+  tabletCompetitionId = competition.id;
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(hub));
+}
+
 function saveScorerState() {
-  if (isSingleScorer() || isDartbotScorer()) saveHub();
+  if (route === 'tabletEntry') saveTabletEntryState();
+  else if (isSingleScorer() || isDartbotScorer()) saveHub();
   else saveState();
 }
 function scorerDoubleOut(live = scorerLive()) {
@@ -946,8 +1208,18 @@ function navButton(id, icon, label) {
 
 function render() {
   if (!isRouteAllowed(route)) route = 'home';
-  const navigation = roleNavigation();
   const app = $('#app');
+  if (isTabletRoute()) {
+    document.body.classList.add('tablet-mode');
+    app.innerHTML = `<div class="tablet-app-shell">${renderRoute()}</div>`;
+    bindCurrentPage();
+    scheduleTabletRefresh();
+    updateInstallButton();
+    return;
+  }
+  clearTimeout(tabletRefreshTimer);
+  document.body.classList.remove('tablet-mode');
+  const navigation = roleNavigation();
   app.innerHTML = `
     <div class="app-shell role-${currentAppRole()}">
       <aside class="sidebar">
@@ -1005,6 +1277,10 @@ function renderRoute() {
     case 'competition': return renderCompetition();
     case 'matches': return renderMatches();
     case 'live': return renderLiveCenter();
+    case 'boardViews': return renderBoardViews();
+    case 'tabletScore': return renderTabletScore();
+    case 'tabletEntry': return renderTabletEntry();
+    case 'tabletQueue': return renderTabletQueue();
     case 'single': return renderSingleMatch();
     case 'singleScorer': return renderScorer();
     case 'training': return renderTraining();
@@ -1945,6 +2221,7 @@ function renderDartbotTurnHint(live) {
 function renderScorer() {
   const standalone = isSingleScorer();
   const dartbotTraining = isDartbotScorer();
+  const tabletEntry = route === 'tabletEntry';
   const live = scorerLive();
   if (!live) {
     route = standalone ? 'single' : (dartbotTraining ? 'training' : 'matches');
@@ -1969,15 +2246,17 @@ function renderScorer() {
   const locked = evaluation.bust || evaluation.checkout || pending.length >= 3 || !playerCanThrow;
   const canSubmit = playerCanThrow && (evaluation.bust || evaluation.checkout || pending.length === 3);
   const submitLabel = evaluation.checkout ? 'Zatwierdź checkout' : (evaluation.bust ? 'Zatwierdź BUST' : 'Zatwierdź wizytę');
-  const backRoute = standalone ? 'single' : (dartbotTraining ? 'training' : 'live');
+  const backRoute = tabletEntry ? 'boardViews' : (standalone ? 'single' : (dartbotTraining ? 'training' : 'live'));
   const contextLabel = standalone
     ? `${live.doubleOut !== false ? 'Double Out' : 'Straight Out'} · pojedynczy mecz`
     : dartbotTraining
       ? `trening · ${live.completedLegs||0}/${Number(hub.trainingLive?.settings?.legsCount)||5} legów · pełny Double Out`
       : `${match.bracketRound ? knockoutStageLabel(match.stageKey) : (match.group ? `Grupa ${match.group}` : 'mecz ligowy')}${Number(live.boardNumber)?` · Tarcza ${Number(live.boardNumber)}`:''}`;
-  const headerActions = dartbotTraining
-    ? `<button class="btn ghost" data-route="training">Zapisz i wyjdź</button><button class="btn danger" id="abandonTrainingRun">Usuń trening</button>`
-    : `<button class="btn ghost" data-route="${backRoute}">Zapisz i wyjdź</button>`;
+  const headerActions = tabletEntry
+    ? ''
+    : dartbotTraining
+      ? `<button class="btn ghost" data-route="training">Zapisz i wyjdź</button><button class="btn danger" id="abandonTrainingRun">Usuń trening</button>`
+      : `<button class="btn ghost" data-route="${backRoute}">Zapisz i wyjdź</button>`;
   return `
     ${pageHeader(
       dartbotTraining ? 'Trening meczowy' : 'Licznik X01',
@@ -2056,6 +2335,14 @@ function scorePlayer(playerId, stats) {
 }
 
 function bindCurrentPage() {
+  $('#tabletFullscreen')?.addEventListener('click', async () => {
+    try {
+      if (!document.fullscreenElement) await document.documentElement.requestFullscreen();
+      else await document.exitFullscreen();
+    } catch (error) { toast('Tryb pełnoekranowy nie jest dostępny w tej przeglądarce'); }
+  });
+  $('#tabletExit')?.addEventListener('click', exitTabletView);
+  $('#tabletRefresh')?.addEventListener('click', () => { reloadTabletData(); render(); });
   $('#showNewCompetition')?.addEventListener('click', openNewCompetitionCreator);
   $('#hideNewCompetition')?.addEventListener('click', () => { newCompetitionPanelOpen=false; render(); });
   $('#newCompetitionForm')?.addEventListener('submit', createCompetition);
@@ -3428,6 +3715,11 @@ function finalizeLiveMatch(winnerId) {
     return;
   }
 
+  if (route === 'tabletEntry') {
+    const completedLive = clone(live);
+    reloadTabletData();
+    state.live = completedLive;
+  }
   const match=state.matches.find(m=>m.id===live.matchId);
   if(!match)return;
   match.legsA=totalLegsA;match.legsB=totalLegsB;match.setsA=setsA;match.setsB=setsB;match.winnerId=winnerId;match.status='completed';match.completedAt=new Date().toISOString();
@@ -3932,7 +4224,15 @@ async function installApp() {
 
 window.addEventListener('beforeinstallprompt',event=>{event.preventDefault();deferredInstallPrompt=event;updateInstallButton();});
 window.addEventListener('appinstalled',()=>{deferredInstallPrompt=null;toast('Aplikacja została zainstalowana');});
-if('serviceWorker' in navigator){window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js?v=1.7.1').catch(console.error));}
+window.addEventListener('storage', event => {
+  if (event.key !== STORAGE_KEY || !isTabletRoute()) return;
+  const current = scorerLive();
+  if (route === 'tabletEntry' && (current?.pendingDarts?.length || current?.pendingSegment)) return;
+  reloadTabletData();
+  render();
+});
+if('serviceWorker' in navigator){window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js?v=1.8.0').catch(console.error));}
 
-if (progressCompetition()) saveState();
+applyStartupTabletView();
+if (!isTabletRoute() && progressCompetition()) saveState();
 render();

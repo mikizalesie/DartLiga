@@ -2,13 +2,14 @@
 
 const LEGACY_STORAGE_KEY = 'dartliga_pwa_state_v1';
 const STORAGE_KEY = 'dartliga_pwa_hub_v2';
-const APP_VERSION = '1.4.0';
+const APP_VERSION = '1.5.0';
 let route = 'home';
 let matchFilter = 'all';
 let tableGroup = 'all';
 let competitionFilter = 'all';
 let deferredInstallPrompt = null;
 let newCompetitionPanelOpen = false;
+let trainingSetupType = null;
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -92,6 +93,9 @@ function defaultHub() {
     competitions: [competition],
     singleMatches: [],
     singleLive: null,
+    trainingSessions: [],
+    trainingLive: null,
+    trainingProfileName: '',
     createdAt: competition.createdAt,
     updatedAt: competition.updatedAt
   };
@@ -158,6 +162,138 @@ function normalizeSingleMatchRecord(value = {}) {
     startedAt: value.startedAt || value.completedAt || new Date().toISOString(),
     completedAt: value.completedAt || new Date().toISOString()
   };
+}
+
+
+const TRAINING_CATALOG = [
+  {
+    id: 'bobs27',
+    name: 'Bob’s 27',
+    category: 'Double',
+    duration: '10–15 min',
+    goal: 'Skuteczność na wszystkich podwójnych.',
+    description: 'Zaczynasz od 27 punktów i przechodzisz kolejno przez D1–D20 oraz Bull.'
+  },
+  {
+    id: 'checkout121',
+    name: '121',
+    category: 'Checkout',
+    duration: '10–20 min',
+    goal: 'Kończenie wysokich wyników i reagowanie po nietrafionej pierwszej lotce.',
+    description: 'Zamykaj kolejne wyniki w limicie 6 lub 9 lotek, z opcjonalnymi poziomami bezpieczeństwa.'
+  },
+  {
+    id: 'hundred',
+    name: '100 lotek na sektor',
+    category: 'Punktowanie',
+    duration: '10–20 min',
+    goal: 'Skupienie lotek i regularność na głównych polach punktowych.',
+    description: 'Sektor trafiony singlem daje 1 pkt, doublem 2 pkt, a treblem 3 pkt.'
+  },
+  {
+    id: 'jdc',
+    name: 'JDC Challenge',
+    category: 'Test kompleksowy',
+    duration: '20–30 min',
+    goal: 'Połączenie singli, double, trebli i pracy na całej tarczy.',
+    description: 'Shanghai 10–15, double 1–20 i Bull, następnie Shanghai 15–20.'
+  },
+  {
+    id: 'halveit',
+    name: 'Halve-It',
+    category: 'Presja',
+    duration: '10–15 min',
+    goal: 'Trafianie wskazanego pola wtedy, gdy jest to konieczne.',
+    description: 'Brak trafienia w rundzie dzieli dotychczasowy wynik przez dwa.'
+  },
+  {
+    id: 'dartbot',
+    name: '501 przeciwko Dartbotowi',
+    category: 'Mecz',
+    duration: '20–40 min',
+    goal: 'Przełożenie punktowania i checkoutów na warunki meczowe.',
+    description: 'Rozegraj co najmniej 5 legów przeciwko przeciwnikowi dopasowanemu do swojej średniej.'
+  },
+  {
+    id: 'session45',
+    name: 'Optymalny trening 45-minutowy',
+    category: 'Plan sesji',
+    duration: '45 min',
+    goal: 'Kompletna sesja: rozgrzewka, punktowanie, double, checkout i mecz.',
+    description: 'Aplikacja prowadzi przez pięć kolejnych bloków i zapisuje wykonanie całej sesji.'
+  }
+];
+
+const BOBS_TARGETS = [
+  ...Array.from({length:20}, (_,index)=>({label:`D${index+1}`, value:(index+1)*2})),
+  {label:'Bull', value:50}
+];
+
+const HALVE_IT_TARGETS = [
+  {label:'20', help:'Punkty zdobyte wyłącznie w sektorze 20.'},
+  {label:'19', help:'Punkty zdobyte wyłącznie w sektorze 19.'},
+  {label:'18', help:'Punkty zdobyte wyłącznie w sektorze 18.'},
+  {label:'Dowolny double', help:'Liczą się wyłącznie trafione pola podwójne.'},
+  {label:'17', help:'Punkty zdobyte wyłącznie w sektorze 17.'},
+  {label:'16', help:'Punkty zdobyte wyłącznie w sektorze 16.'},
+  {label:'Dowolny treble', help:'Liczą się wyłącznie trafione pola potrójne.'},
+  {label:'15', help:'Punkty zdobyte wyłącznie w sektorze 15.'},
+  {label:'Bull', help:'Outer Bull = 25, Bullseye = 50.'}
+];
+
+const SESSION_45_STAGES = [
+  {minutes:5, title:'Rozgrzewka', instruction:'Spokojnie rzucaj na duże single i Bull. Skup się na rytmie, postawie oraz powtarzalnym wypuszczeniu lotki.'},
+  {minutes:10, title:'Punktowanie', instruction:'Wykonaj 100 lotek na 20 albo wariant ze zmianą sektorów 20–19–18. Zapisz wynik lub najważniejszą obserwację.'},
+  {minutes:10, title:'Bob’s 27', instruction:'Przejdź przez kolejne double. Zapisz wynik końcowy, ostatnie pole i łączną liczbę trafień.'},
+  {minutes:10, title:'Checkout', instruction:'Ćwicz zakres 61–80 albo zagraj w 121. Reaguj po każdej nietrafionej pierwszej lotce.'},
+  {minutes:10, title:'Mecz 501', instruction:'Rozegraj 2–3 legi przeciwko Dartbotowi z pełnym Double Out.'}
+];
+
+function trainingDefinition(type) {
+  return TRAINING_CATALOG.find(item=>item.id===type) || TRAINING_CATALOG[0];
+}
+
+function normalizeTrainingSession(value = {}) {
+  const type = TRAINING_CATALOG.some(item=>item.id===value.type) ? value.type : 'bobs27';
+  return {
+    ...value,
+    id: value.id || uid('training'),
+    type,
+    playerName: String(value.playerName || 'Zawodnik'),
+    settings: value.settings && typeof value.settings === 'object' ? value.settings : {},
+    summary: value.summary && typeof value.summary === 'object' ? value.summary : {},
+    data: value.data && typeof value.data === 'object' ? value.data : {},
+    startedAt: value.startedAt || value.completedAt || new Date().toISOString(),
+    completedAt: value.completedAt || new Date().toISOString()
+  };
+}
+
+function normalizeTrainingLive(value) {
+  if (!value || typeof value !== 'object') return null;
+  const type = TRAINING_CATALOG.some(item=>item.id===value.type) ? value.type : 'bobs27';
+  return {
+    ...value,
+    id: value.id || uid('training_live'),
+    type,
+    playerName: String(value.playerName || 'Zawodnik'),
+    settings: value.settings && typeof value.settings === 'object' ? value.settings : {},
+    data: value.data && typeof value.data === 'object' ? value.data : {},
+    startedAt: value.startedAt || new Date().toISOString()
+  };
+}
+
+function trainingMetric(session) {
+  const summary = session?.summary || {};
+  switch (session?.type) {
+    case 'bobs27': return {label:'Wynik końcowy', value:Number(summary.finalScore)||0, suffix:' pkt'};
+    case 'checkout121': return {label:'Najwyższy wynik', value:Number(summary.highestTarget)||0, suffix:''};
+    case 'hundred': return {label:'Wynik', value:Number(summary.score)||0, suffix:' pkt'};
+    case 'jdc': return {label:'Wynik JDC', value:Number(summary.score)||0, suffix:' pkt'};
+    case 'halveit': return {label:'Wynik końcowy', value:Number(summary.finalScore)||0, suffix:' pkt'};
+    case 'dartbot': return {label:'Średnia 3-dart', value:Number(summary.playerAverage)||0, suffix:''};
+    case 'session45': return {label:'Wykonane bloki', value:Number(summary.completedStages)||0, suffix:'/5'};
+    default: return {label:'Wynik', value:0, suffix:''};
+  }
 }
 
 function normalizeCompetition(value = {}) {
@@ -228,7 +364,10 @@ function loadHub() {
           activeCompetitionId,
           competitions,
           singleMatches: Array.isArray(parsed.singleMatches) ? parsed.singleMatches.map(normalizeSingleMatchRecord) : [],
-          singleLive: normalizeSingleLive(parsed.singleLive)
+          singleLive: normalizeSingleLive(parsed.singleLive),
+          trainingSessions: Array.isArray(parsed.trainingSessions) ? parsed.trainingSessions.map(normalizeTrainingSession) : [],
+          trainingLive: normalizeTrainingLive(parsed.trainingLive),
+          trainingProfileName: String(parsed.trainingProfileName || '')
         };
       }
     }
@@ -243,6 +382,9 @@ function loadHub() {
         competitions: [competition],
         singleMatches: [],
         singleLive: null,
+        trainingSessions: [],
+        trainingLive: null,
+        trainingProfileName: '',
         createdAt: competition.createdAt,
         updatedAt: new Date().toISOString()
       };
@@ -430,7 +572,7 @@ function competitionNumbers(competition) {
 }
 
 function navButton(id, icon, label) {
-  const activeRoute = route === 'scorer' ? 'matches' : (route === 'singleScorer' ? 'single' : route);
+  const activeRoute = route === 'scorer' ? 'matches' : (route === 'singleScorer' ? 'single' : (route === 'trainingRun' || route === 'trainingSetup' ? 'training' : route));
   return `<button data-route="${id}" class="${activeRoute === id ? 'active' : ''}"><span class="ico">${icon}</span>${label}</button>`;
 }
 
@@ -446,6 +588,7 @@ function render() {
           ${navButton('competition','♟','Konfiguracja')}
           ${navButton('matches','◉','Mecze')}
           ${navButton('single','◎','Pojedynczy mecz')}
+          ${navButton('training','◈','Trening')}
           ${navButton('tables','▦','Tabele')}
           ${navButton('stats','↗','Statystyki')}
           ${navButton('settings','⚙','Ustawienia')}
@@ -473,6 +616,7 @@ function render() {
         ${mobileNav('dashboard','⌂','Pulpit')}
         ${mobileNav('matches','◉','Mecze')}
         ${mobileNav('single','◎','1 mecz')}
+        ${mobileNav('training','◈','Trening')}
         ${mobileNav('tables','▦','Tabela')}
         ${mobileNav('stats','↗','Stat.')}
       </nav>
@@ -488,7 +632,7 @@ function render() {
 }
 
 function mobileNav(id, icon, label) {
-  const activeRoute = route === 'scorer' ? 'matches' : (route === 'singleScorer' ? 'single' : route);
+  const activeRoute = route === 'scorer' ? 'matches' : (route === 'singleScorer' ? 'single' : (route === 'trainingRun' || route === 'trainingSetup' ? 'training' : route));
   return `<button data-route="${id}" class="${activeRoute === id ? 'active' : ''}"><span>${icon}</span>${label}</button>`;
 }
 
@@ -499,6 +643,9 @@ function renderRoute() {
     case 'matches': return renderMatches();
     case 'single': return renderSingleMatch();
     case 'singleScorer': return renderScorer();
+    case 'training': return renderTraining();
+    case 'trainingSetup': return renderTrainingSetup();
+    case 'trainingRun': return renderTrainingRun();
     case 'tables': return renderTables();
     case 'stats': return renderStats();
     case 'settings': return renderSettings();
@@ -975,6 +1122,193 @@ function renderSettings() {
     <section class="card danger-zone" style="margin-top:16px"><h2 class="red">Strefa niebezpieczna</h2><p class="muted">Usunięcie danych kasuje całe archiwum lig, turniejów i pojedynczych meczów. Operacja jest nieodwracalna, chyba że wcześniej wykonano eksport JSON.</p><button class="btn danger" id="resetAll">Usuń całe archiwum</button></section>`;
 }
 
+
+function trainingSessionsSorted() {
+  return (hub.trainingSessions || []).slice().sort((a,b)=>String(b.completedAt || '').localeCompare(String(a.completedAt || '')));
+}
+
+function trainingSummaryBadges(session) {
+  const summary = session.summary || {};
+  switch (session.type) {
+    case 'bobs27':
+      return `<span class="badge green">${summary.finalScore ?? 0} pkt</span><span class="badge">Double: ${summary.totalHits ?? 0}</span><span class="badge">${esc(summary.failedAt || 'Ukończono')}</span>`;
+    case 'checkout121':
+      return `<span class="badge green">Najwyżej: ${summary.highestTarget ?? 0}</span><span class="badge">Skuteczność: ${fmt(summary.successRate || 0)}%</span><span class="badge">Próby: ${summary.attempts ?? 0}</span>`;
+    case 'hundred':
+      return `<span class="badge green">${summary.score ?? 0} pkt</span><span class="badge">Celność: ${fmt(summary.hitRate || 0)}%</span><span class="badge">Lotki: ${summary.totalDarts ?? 0}</span>`;
+    case 'jdc':
+      return `<span class="badge green">${summary.score ?? 0} pkt</span><span class="badge">Shanghai: ${summary.shanghais ?? 0}</span><span class="badge">Double: ${summary.doublesHit ?? 0}/21</span>`;
+    case 'halveit':
+      return `<span class="badge green">${summary.finalScore ?? 0} pkt</span><span class="badge">Nietrafione rundy: ${summary.misses ?? 0}</span>`;
+    case 'dartbot':
+      return `<span class="badge green">Legi ${summary.playerLegs ?? 0}:${summary.botLegs ?? 0}</span><span class="badge">Śr. ${fmt(summary.playerAverage || 0)}</span><span class="badge">Dartbot ${fmt(summary.botAverage || 0)}</span>`;
+    case 'session45':
+      return `<span class="badge green">${summary.completedStages ?? 0}/5 bloków</span><span class="badge">Ocena: ${summary.rating ?? '—'}/10</span>`;
+    default:
+      return '';
+  }
+}
+
+function renderTraining() {
+  const live = hub.trainingLive;
+  const sessions = trainingSessionsSorted();
+  return `
+    ${pageHeader(
+      'Rozwój umiejętności',
+      'Trening',
+      'Wybierz ćwiczenie, wykonuj kolejne zadania zgodnie z instrukcją i buduj historię wyników do porównania po trzech miesiącach.',
+      live ? '<button class="btn primary" id="resumeTraining">Wznów trening</button>' : ''
+    )}
+
+    ${live ? `<section class="card accent training-live-card">
+      <div class="section-head">
+        <div>
+          <div class="eyebrow">Trening w trakcie</div>
+          <h2>${esc(trainingDefinition(live.type).name)}</h2>
+          <p class="muted">${esc(live.playerName)} · rozpoczęto ${formatDateTime(live.startedAt)}</p>
+        </div>
+        <div class="row-actions"><button class="btn primary" id="resumeTrainingCard">Kontynuuj</button><button class="btn danger" id="abandonTraining">Usuń rozpoczęty trening</button></div>
+      </div>
+    </section>` : ''}
+
+    <section class="training-catalog">
+      ${TRAINING_CATALOG.map(item=>`<article class="card training-card">
+        <div class="training-card-head"><span class="training-icon">${item.id==='bobs27'?'D':item.id==='checkout121'?'121':item.id==='hundred'?'100':item.id==='jdc'?'JDC':item.id==='halveit'?'½':item.id==='dartbot'?'501':'45'}</span><div><span class="badge blue">${esc(item.category)}</span><h2>${esc(item.name)}</h2></div></div>
+        <p>${esc(item.goal)}</p>
+        <p class="muted">${esc(item.description)}</p>
+        <div class="training-card-footer"><span class="badge">${esc(item.duration)}</span><button class="btn primary start-training" data-type="${item.id}">Wybierz trening</button></div>
+      </article>`).join('')}
+    </section>
+
+    <section class="card" style="margin-top:16px">
+      <div class="section-head"><div><h2>Porównanie postępu</h2><p class="muted">Pierwszy wynik jest porównywany z najnowszym oraz z pomiarem wykonanym najbliżej 90. dnia.</p></div></div>
+      ${renderTrainingComparisons(sessions)}
+    </section>
+
+    <section class="card" style="margin-top:16px">
+      <div class="section-head"><div><h2>Historia treningów</h2><p class="muted">Każdy ukończony trening pozostaje zapisany w urządzeniu i w eksporcie JSON.</p></div><span class="badge green">${sessions.length}</span></div>
+      ${sessions.length ? `<div class="training-history">${sessions.map(renderTrainingHistoryRow).join('')}</div>` : empty('Brak zapisanych treningów','Ukończ pierwsze ćwiczenie, aby rozpocząć pomiar postępu.')}
+    </section>
+
+    <section class="card compact weekly-plan" style="margin-top:16px">
+      <div class="section-head"><h2>Proponowany podział 3 treningów tygodniowo</h2></div>
+      <div class="weekly-grid"><div><span>Sesja 1</span><strong>Punktowanie</strong><small>Zmiana 20 / 19 / 18</small></div><div><span>Sesja 2</span><strong>Double + checkouty</strong><small>Bob’s 27 oraz 121</small></div><div><span>Sesja 3</span><strong>JDC + mecz</strong><small>Test kompleksowy i 501</small></div></div>
+    </section>`;
+}
+
+function renderTrainingComparisons(sessions) {
+  const groups = TRAINING_CATALOG.map(def=>({def, sessions:sessions.filter(item=>item.type===def.id).slice().sort((a,b)=>String(a.completedAt).localeCompare(String(b.completedAt)))})).filter(group=>group.sessions.length);
+  if (!groups.length) return empty('Brak danych do porównania','Po pierwszym treningu zobaczysz punkt odniesienia. Pomiar trzymiesięczny pojawi się po około 90 dniach.');
+  return `<div class="training-comparison-grid">${groups.map(({def,sessions:items})=>{
+    const first=items[0];
+    const latest=items.at(-1);
+    const firstDate=new Date(first.completedAt);
+    const targetTime=firstDate.getTime()+90*86400000;
+    const after=items.slice(1).filter(item=>new Date(item.completedAt).getTime()>=firstDate.getTime()+75*86400000).sort((a,b)=>Math.abs(new Date(a.completedAt).getTime()-targetTime)-Math.abs(new Date(b.completedAt).getTime()-targetTime))[0] || null;
+    const firstMetric=trainingMetric(first);
+    const latestMetric=trainingMetric(latest);
+    const afterMetric=after?trainingMetric(after):null;
+    const daysRemaining=Math.max(0,Math.ceil((targetTime-Date.now())/86400000));
+    const delta=latestMetric.value-firstMetric.value;
+    return `<div class="training-comparison-card"><div class="section-head"><h3>${esc(def.name)}</h3><span class="badge">${items.length} pomiarów</span></div><div class="comparison-values"><div><span>Pierwszy</span><strong>${fmtTrainingMetric(firstMetric)}</strong><small>${formatDateTime(first.completedAt)}</small></div><div><span>Najnowszy</span><strong>${fmtTrainingMetric(latestMetric)}</strong><small class="${delta>0?'green':delta<0?'red':''}">${delta>0?'+':''}${Number.isInteger(delta)?delta:delta.toFixed(2)}</small></div><div><span>Po 3 miesiącach</span><strong>${afterMetric?fmtTrainingMetric(afterMetric):'—'}</strong><small>${after?formatDateTime(after.completedAt):(daysRemaining?`za około ${daysRemaining} dni`:'wykonaj kolejny pomiar')}</small></div></div></div>`;
+  }).join('')}</div>`;
+}
+
+function fmtTrainingMetric(metric) {
+  const value = Number(metric.value)||0;
+  return `${Number.isInteger(value)?value:value.toFixed(2)}${metric.suffix||''}`;
+}
+
+function renderTrainingHistoryRow(session) {
+  const def=trainingDefinition(session.type);
+  return `<article class="training-history-row"><div class="training-history-date"><span>${formatDateTime(session.completedAt)}</span><strong>${esc(session.playerName)}</strong></div><div class="training-history-main"><h3>${esc(def.name)}</h3><div class="training-history-badges">${trainingSummaryBadges(session)}</div></div><div class="row-actions"><button class="btn small ghost repeat-training" data-id="${session.id}">Powtórz</button><button class="btn small danger delete-training" data-id="${session.id}">Usuń</button></div></article>`;
+}
+
+function renderTrainingSetup() {
+  const type = trainingSetupType || 'bobs27';
+  const def = trainingDefinition(type);
+  const profile = hub.trainingProfileName || '';
+  let options='';
+  if (type==='checkout121') options=`<div class="field"><label>Wynik początkowy</label><select name="startTarget"><option value="61">61 — początkujący</option><option value="121" selected>121 — podstawowy</option></select></div><div class="field"><label>Limit lotek na wynik</label><select name="maxDarts"><option value="9" selected>9 lotek</option><option value="6">6 lotek</option></select></div><div class="field wide"><label>Poziomy bezpieczeństwa</label><div class="check-grid"><label><input type="checkbox" name="safe125" value="125"> 125</label><label><input type="checkbox" name="safe130" value="130"> 130</label><label><input type="checkbox" name="safe135" value="135"> 135</label></div><small class="field-help">Po osiągnięciu zaznaczonego poziomu nie spadniesz już poniżej niego.</small></div>`;
+  if (type==='hundred') options=`<div class="field wide"><label>Wariant</label><select name="variant"><option value="t20">100 lotek na 20</option><option value="t19">100 lotek na 19</option><option value="bull">100 lotek na Bull</option><option value="switch">40 × 20, 30 × 19, 20 × 18, 10 × Bull</option></select></div>`;
+  if (type==='dartbot') options=`<div class="field"><label>Liczba legów sesji</label><input type="number" name="legsCount" min="5" max="25" value="5"></div><div class="field"><label>Średnia Dartbota</label><input type="number" name="botAverage" min="20" max="110" step="1" value="50"></div><div class="field"><label>Punkty startowe</label><select name="startScore"><option value="301">301</option><option value="501" selected>501</option><option value="701">701</option></select></div>`;
+  return `${pageHeader('Konfiguracja treningu', def.name, def.goal, '<button class="btn ghost" data-route="training">Wróć</button>')}<section class="card"><form id="trainingSetupForm" class="form-grid"><input type="hidden" name="type" value="${type}"><div class="field wide"><label>Nazwa zawodnika</label><input name="playerName" maxlength="50" value="${esc(profile)}" placeholder="np. Michał" required></div>${options}<div class="wide note"><strong>${esc(def.name)}</strong><br>${esc(def.description)}</div><div class="wide"><button class="btn primary" type="submit">Rozpocznij trening</button></div></form></section>`;
+}
+
+function renderTrainingRun() {
+  const live=hub.trainingLive;
+  if(!live){route='training';return renderTraining();}
+  const def=trainingDefinition(live.type);
+  const header=pageHeader('Trening w toku',def.name,`${def.goal} · ${esc(live.playerName)}`,`<button class="btn ghost" data-route="training">Zapisz i wyjdź</button><button class="btn danger" id="abandonTrainingRun">Usuń trening</button>`);
+  let body='';
+  if(live.type==='bobs27') body=renderBobs27(live);
+  if(live.type==='checkout121') body=renderCheckout121(live);
+  if(live.type==='hundred') body=renderHundred(live);
+  if(live.type==='jdc') body=renderJdc(live);
+  if(live.type==='halveit') body=renderHalveIt(live);
+  if(live.type==='dartbot') body=renderDartbot(live);
+  if(live.type==='session45') body=renderSession45(live);
+  return `${header}<div class="training-run">${body}</div>`;
+}
+
+function trainingProgress(current,total,label='Etap') {
+  const value=Math.min(100,Math.max(0,total?current/total*100:0));
+  return `<div class="training-progress"><div><span>${label}</span><strong>${current}/${total}</strong></div><div class="training-progress-track"><i style="width:${value}%"></i></div></div>`;
+}
+
+function renderBobs27(live) {
+  const data=live.data;
+  const target=BOBS_TARGETS[data.targetIndex||0];
+  return `<section class="card accent">${trainingProgress((data.targetIndex||0)+1,BOBS_TARGETS.length,'Pole')}<div class="training-task"><div><span>Aktualny cel</span><strong>${target.label}</strong><small>3 lotki. Trafienie dodaje ${target.value} pkt, brak trafienia odejmuje ${target.value} pkt.</small></div><div class="training-score"><span>Wynik</span><strong>${data.score}</strong><small>Trafione double: ${data.totalHits||0}</small></div></div><form id="bobsForm" class="training-action-form"><div class="field"><label>Liczba trafień w 3 lotkach</label><select name="hits"><option value="0">0 — brak trafienia</option><option value="1">1 trafienie</option><option value="2">2 trafienia</option><option value="3">3 trafienia</option></select></div><button class="btn primary" type="submit">Zapisz rundę i przejdź dalej</button></form></section><section class="card compact"><div class="note">Zaczynasz z 27 punktami. Po wyniku poniżej zera trening kończy się automatycznie i zapisuje pole, na którym odpadłeś.</div></section>`;
+}
+
+function renderCheckout121(live) {
+  const data=live.data, max=Number(live.settings.maxDarts)||9;
+  return `<section class="card accent">${trainingProgress(Math.max(0,(data.current||0)-(Number(live.settings.startTarget)||121)),Math.max(1,(data.highest||0)-(Number(live.settings.startTarget)||121)+1),'Postęp')}<div class="training-task"><div><span>Zamknij wynik</span><strong>${data.current}</strong><small>Maksymalnie ${max} lotek. Po niepowodzeniu wracasz do poziomu ${data.floor}.</small></div><div class="training-score"><span>Najwyżej</span><strong>${data.highest}</strong><small>${data.successes||0} sukcesów / ${data.attempts||0} prób</small></div></div><div class="checkout-training-actions"><span class="muted">Zamknięte w:</span>${Array.from({length:max},(_,i)=>i+1).map(value=>`<button class="btn ${value<=3?'primary':'ghost'} checkout-success" data-darts="${value}">${value} ${value===1?'lotce':'lotkach'}</button>`).join('')}<button class="btn danger" id="checkoutFailed">Nie zamknięto</button></div><div class="row-actions" style="margin-top:16px"><button class="btn ghost" id="finishTrainingNow">Zakończ i zapisz wynik</button></div></section><section class="card compact"><div class="note">Po zamknięciu przechodzisz o jeden punkt wyżej. Zaznaczone poziomy bezpieczeństwa stają się nową dolną granicą.</div></section>`;
+}
+
+function hundredSegments(variant) {
+  if(variant==='t19') return [{target:'19',limit:100}];
+  if(variant==='bull') return [{target:'Bull',limit:100}];
+  if(variant==='switch') return [{target:'20',limit:40},{target:'19',limit:30},{target:'18',limit:20},{target:'Bull',limit:10}];
+  return [{target:'20',limit:100}];
+}
+
+function renderHundred(live) {
+  const data=live.data, segments=data.segments||hundredSegments(live.settings.variant), segment=segments[data.segmentIndex||0], remaining=segment.limit-(data.segmentDarts||0), batch=Math.min(10,remaining), bull=segment.target==='Bull';
+  return `<section class="card accent">${trainingProgress(data.totalDarts||0,segments.reduce((sum,item)=>sum+item.limit,0),'Lotki')}<div class="training-task"><div><span>Cel bieżącej serii</span><strong>${esc(segment.target)}</strong><small>Wpisz wynik kolejnych maksymalnie ${batch} lotek. Pozostało ${remaining} na ten cel.</small></div><div class="training-score"><span>Punkty</span><strong>${data.points||0}</strong><small>Celne: ${(data.singles||0)+(data.doubles||0)+(data.triples||0)} / ${data.totalDarts||0}</small></div></div><form id="hundredForm" class="training-count-form"><div class="field"><label>${bull?'Outer Bull':'Single'}</label><input type="number" name="single" min="0" max="${batch}" value="0"></div><div class="field"><label>${bull?'Bullseye':'Double'}</label><input type="number" name="double" min="0" max="${batch}" value="0"></div>${bull?'':`<div class="field"><label>Triple</label><input type="number" name="triple" min="0" max="${batch}" value="0"></div>`}<div class="field"><label>Pudło / inny sektor</label><input type="number" name="miss" min="0" max="${batch}" value="${batch}"></div><button class="btn primary" type="submit">Zapisz serię</button></form><div class="note" style="margin-top:14px">Suma wpisanych lotek musi wynosić od 1 do ${batch}. Punktacja: S = 1, D = 2, T = 3; na Bull Outer = 1, Bullseye = 2.</div></section>`;
+}
+
+function jdcSequence() {
+  return [
+    ...Array.from({length:6},(_,i)=>({kind:'shanghai',target:i+10,label:`Shanghai ${i+10}`})),
+    ...Array.from({length:20},(_,i)=>({kind:'double',target:i+1,label:`D${i+1}`})),
+    {kind:'double',target:25,label:'Bull'},
+    ...Array.from({length:6},(_,i)=>({kind:'shanghai',target:i+15,label:`Shanghai ${i+15}`}))
+  ];
+}
+
+function renderJdc(live) {
+  const data=live.data, sequence=data.sequence||jdcSequence(), task=sequence[data.index||0];
+  const content=task.kind==='double'?`<div class="jdc-hit-actions"><button class="btn primary jdc-double" data-hit="1">Trafione (+50)</button><button class="btn danger jdc-double" data-hit="0">Pudło</button></div>`:`<form id="jdcShanghaiForm" class="training-count-form"><div class="field"><label>Single</label><input type="number" name="single" min="0" max="3" value="0"></div><div class="field"><label>Double</label><input type="number" name="double" min="0" max="3" value="0"></div><div class="field"><label>Triple</label><input type="number" name="triple" min="0" max="3" value="0"></div><div class="field"><label>Pudło</label><input type="number" name="miss" min="0" max="3" value="3"></div><button class="btn primary" type="submit">Zapisz 3 lotki</button></form>`;
+  return `<section class="card accent">${trainingProgress((data.index||0)+1,sequence.length,'Zadanie')}<div class="training-task"><div><span>Aktualne zadanie</span><strong>${esc(task.label)}</strong><small>${task.kind==='double'?'Jedna lotka. Każde trafienie double lub Bull = 50 punktów.':'Trzy lotki. Shanghai to co najmniej jeden single, double i triple — premia 100 punktów.'}</small></div><div class="training-score"><span>Wynik JDC</span><strong>${data.score||0}</strong><small>Shanghai: ${data.shanghais||0} · Double: ${data.doublesHit||0}</small></div></div>${content}</section>`;
+}
+
+function renderHalveIt(live) {
+  const data=live.data, target=HALVE_IT_TARGETS[data.index||0];
+  return `<section class="card accent">${trainingProgress((data.index||0)+1,HALVE_IT_TARGETS.length,'Runda')}<div class="training-task"><div><span>Aktualny cel</span><strong>${esc(target.label)}</strong><small>${esc(target.help)} Masz 3 lotki.</small></div><div class="training-score"><span>Wynik</span><strong>${data.score||0}</strong><small>Połowienia: ${data.misses||0}</small></div></div><form id="halveForm" class="training-action-form"><div class="field"><label>Punkty zdobyte z wyznaczonego pola</label><input type="number" name="points" min="0" max="180" value="0" required></div><button class="btn primary" type="submit">Zapisz rundę</button></form><div class="note" style="margin-top:14px">Wpisz 0, gdy żadna z trzech lotek nie trafiła celu. Aplikacja automatycznie podzieli dotychczasowy wynik przez dwa.</div></section>`;
+}
+
+function renderDartbot(live) {
+  const data=live.data;
+  return `<section class="card accent">${trainingProgress((data.completedLegs||0),Number(live.settings.legsCount)||5,'Legi')}<div class="dartbot-board"><div class="dartbot-player ${data.turn==='player'?'active':''}"><span>${esc(live.playerName)}</span><strong>${data.playerRemaining}</strong><small>Legi ${data.playerLegs||0} · śr. ${fmt(data.playerDarts?data.playerScore/data.playerDarts*3:0)}</small></div><div class="dartbot-center"><span>Leg ${data.completedLegs+1}</span><strong>${data.playerLegs||0}:${data.botLegs||0}</strong><small>${data.turn==='player'?'Twój rzut':'Rzuca Dartbot'}</small></div><div class="dartbot-player ${data.turn==='bot'?'active':''}"><span>Dartbot ${live.settings.botAverage}</span><strong>${data.botRemaining}</strong><small>Legi ${data.botLegs||0} · śr. ${fmt(data.botDarts?data.botScore/data.botDarts*3:0)}</small></div></div><form id="dartbotForm" class="training-action-form"><div class="field"><label>Wynik Twojej wizyty</label><input type="number" name="score" min="0" max="180" value="60" required></div><div class="field"><label>Liczba użytych lotek</label><select name="darts"><option value="3">3</option><option value="2">2</option><option value="1">1</option></select></div><button class="btn primary" type="submit">Zapisz wizytę</button></form><div class="note" style="margin-top:14px">Pełny Double Out. Gdy wpisany wynik zamyka pozostałą liczbę, leg zostanie zapisany automatycznie. Dartbot odpowiada wizytą dopasowaną do ustawionej średniej.</div></section>`;
+}
+
+function renderSession45(live) {
+  const data=live.data, stage=SESSION_45_STAGES[data.index||0];
+  return `<section class="card accent">${trainingProgress((data.index||0)+1,SESSION_45_STAGES.length,'Blok')}<div class="training-task"><div><span>${stage.minutes} minut</span><strong>${esc(stage.title)}</strong><small>${esc(stage.instruction)}</small></div><div class="training-score"><span>Wykonano</span><strong>${data.index||0}/5</strong><small>Łączny plan: 45 minut</small></div></div><form id="session45Form" class="training-action-form"><div class="field"><label>Wynik lub krótka obserwacja z bloku</label><input name="note" maxlength="160" placeholder="np. 42 pkt, D16 niestabilne, dobra koncentracja"></div>${data.index===SESSION_45_STAGES.length-1?'<div class="field"><label>Ocena całej sesji 1–10</label><input type="number" name="rating" min="1" max="10" value="7"></div>':''}<button class="btn primary" type="submit">${data.index===SESSION_45_STAGES.length-1?'Zakończ i zapisz sesję':'Zapisz blok i pokaż następny'}</button></form></section>`;
+}
+
 function renderScorer() {
   const standalone = isSingleScorer();
   const live = scorerLive();
@@ -1130,6 +1464,24 @@ function bindCurrentPage() {
   $('#newCompetitionFormat')?.addEventListener('change', updateNewCompetitionFields);
   $('#competitionFormat')?.addEventListener('change', updateCurrentCompetitionFields);
   updateNewCompetitionFields();
+  $$('.start-training').forEach(b=>b.addEventListener('click',()=>openTrainingSetup(b.dataset.type)));
+  $('#trainingSetupForm')?.addEventListener('submit',startTrainingSession);
+  $('#resumeTraining')?.addEventListener('click',resumeTraining);
+  $('#resumeTrainingCard')?.addEventListener('click',resumeTraining);
+  $('#abandonTraining')?.addEventListener('click',abandonTraining);
+  $('#abandonTrainingRun')?.addEventListener('click',abandonTraining);
+  $$('.repeat-training').forEach(b=>b.addEventListener('click',()=>repeatTraining(b.dataset.id)));
+  $$('.delete-training').forEach(b=>b.addEventListener('click',()=>deleteTraining(b.dataset.id)));
+  $('#bobsForm')?.addEventListener('submit',submitBobsRound);
+  $$('.checkout-success').forEach(b=>b.addEventListener('click',()=>submitCheckoutAttempt(true,Number(b.dataset.darts))));
+  $('#checkoutFailed')?.addEventListener('click',()=>submitCheckoutAttempt(false,Number(hub.trainingLive?.settings?.maxDarts)||9));
+  $('#finishTrainingNow')?.addEventListener('click',finishOpenTraining);
+  $('#hundredForm')?.addEventListener('submit',submitHundredBatch);
+  $('#jdcShanghaiForm')?.addEventListener('submit',submitJdcShanghai);
+  $$('.jdc-double').forEach(b=>b.addEventListener('click',()=>submitJdcDouble(b.dataset.hit==='1')));
+  $('#halveForm')?.addEventListener('submit',submitHalveRound);
+  $('#dartbotForm')?.addEventListener('submit',submitDartbotVisit);
+  $('#session45Form')?.addEventListener('submit',submitSession45Stage);
   $('#singleMatchForm')?.addEventListener('submit', createSingleMatch);
   $('#resumeSingleMatch')?.addEventListener('click', resumeSingleMatch);
   $('#resumeSingleMatchCard')?.addEventListener('click', resumeSingleMatch);
@@ -2378,6 +2730,190 @@ function computePlayerStats() {
 
 function signed(value) { return value>0?`+${value}`:String(value); }
 
+
+function openTrainingSetup(type) {
+  trainingSetupType=trainingDefinition(type).id;
+  route='trainingSetup';
+  render();
+}
+
+function initialTrainingData(type, settings={}) {
+  if(type==='bobs27') return {score:27,targetIndex:0,totalHits:0,rounds:[]};
+  if(type==='checkout121') {const start=Number(settings.startTarget)||121;return {current:start,highest:start,floor:start,attempts:0,successes:0,failures:0,attemptLog:[]};}
+  if(type==='hundred') return {segments:hundredSegments(settings.variant),segmentIndex:0,segmentDarts:0,totalDarts:0,points:0,singles:0,doubles:0,triples:0,misses:0,rounds:[]};
+  if(type==='jdc') return {sequence:jdcSequence(),index:0,score:0,shanghais:0,doublesHit:0,rounds:[]};
+  if(type==='halveit') return {index:0,score:0,misses:0,rounds:[]};
+  if(type==='dartbot') {const start=Number(settings.startScore)||501;return {playerRemaining:start,botRemaining:start,playerLegs:0,botLegs:0,completedLegs:0,legNumber:1,turn:'player',playerScore:0,playerDarts:0,botScore:0,botDarts:0,visits:[]};}
+  return {index:0,notes:[],rating:null};
+}
+
+function startTrainingSession(event) {
+  event.preventDefault();
+  if(hub.trainingLive && !confirm('Inny trening jest już rozpoczęty. Usunąć go i rozpocząć nowy?')) return;
+  const form=new FormData(event.currentTarget);
+  const type=String(form.get('type')||trainingSetupType||'bobs27');
+  const playerName=String(form.get('playerName')||'').trim();
+  if(!playerName)return toast('Podaj nazwę zawodnika');
+  const settings={};
+  if(type==='checkout121'){
+    settings.startTarget=Number(form.get('startTarget'))||121;
+    settings.maxDarts=Number(form.get('maxDarts'))||9;
+    settings.safeLevels=[125,130,135].filter(level=>form.get(`safe${level}`));
+  }
+  if(type==='hundred')settings.variant=String(form.get('variant')||'t20');
+  if(type==='dartbot'){
+    settings.legsCount=Math.max(5,Number(form.get('legsCount'))||5);
+    settings.botAverage=Math.max(20,Math.min(110,Number(form.get('botAverage'))||50));
+    settings.startScore=Number(form.get('startScore'))||501;
+  }
+  hub.trainingProfileName=playerName;
+  hub.trainingLive={id:uid('training'),type,playerName,settings,data:initialTrainingData(type,settings),startedAt:new Date().toISOString()};
+  saveHub();route='trainingRun';render();toast('Trening rozpoczęty');
+}
+
+function resumeTraining(){if(!hub.trainingLive)return;route='trainingRun';render();}
+
+function abandonTraining(){
+  if(!hub.trainingLive)return;
+  if(!confirm('Usunąć rozpoczęty trening bez zapisywania wyniku?'))return;
+  hub.trainingLive=null;saveHub();route='training';render();toast('Rozpoczęty trening usunięty');
+}
+
+function repeatTraining(id){
+  const session=(hub.trainingSessions||[]).find(item=>item.id===id);if(!session)return;
+  trainingSetupType=session.type;hub.trainingProfileName=session.playerName||hub.trainingProfileName;route='trainingSetup';render();
+}
+
+function deleteTraining(id){
+  const session=(hub.trainingSessions||[]).find(item=>item.id===id);if(!session)return;
+  if(!confirm(`Usunąć zapis treningu „${trainingDefinition(session.type).name}”?`))return;
+  hub.trainingSessions=(hub.trainingSessions||[]).filter(item=>item.id!==id);saveHub();render();toast('Trening usunięty z historii');
+}
+
+function completeTraining(summary={}) {
+  const live=hub.trainingLive;if(!live)return;
+  const record=normalizeTrainingSession({...clone(live),summary,completedAt:new Date().toISOString()});
+  hub.trainingSessions=[record,...(hub.trainingSessions||[]).filter(item=>item.id!==record.id)];
+  hub.trainingLive=null;saveHub();route='training';render();toast(`Zapisano trening: ${trainingDefinition(record.type).name}`);
+}
+
+function submitBobsRound(event){
+  event.preventDefault();const live=hub.trainingLive;if(live?.type!=='bobs27')return;
+  const hits=Math.max(0,Math.min(3,Number(new FormData(event.currentTarget).get('hits'))||0));
+  const data=live.data,target=BOBS_TARGETS[data.targetIndex||0];
+  data.score+=hits?target.value*hits:-target.value;data.totalHits=(data.totalHits||0)+hits;data.rounds.push({target:target.label,hits,score:data.score});
+  if(data.score<0)return completeTraining({finalScore:data.score,totalHits:data.totalHits,failedAt:target.label,completedTargets:data.targetIndex});
+  if(data.targetIndex>=BOBS_TARGETS.length-1)return completeTraining({finalScore:data.score,totalHits:data.totalHits,failedAt:null,completedTargets:BOBS_TARGETS.length});
+  data.targetIndex++;saveHub();render();
+}
+
+function updateCheckoutFloor(live){
+  const levels=(live.settings.safeLevels||[]).slice().sort((a,b)=>a-b);
+  const reached=levels.filter(level=>live.data.highest>=level);
+  live.data.floor=reached.length?Math.max(Number(live.settings.startTarget)||121,...reached):Number(live.settings.startTarget)||121;
+}
+
+function submitCheckoutAttempt(success,darts){
+  const live=hub.trainingLive;if(live?.type!=='checkout121')return;
+  const data=live.data;data.attempts++;data.attemptLog.push({target:data.current,success,darts,at:new Date().toISOString()});
+  if(success){data.successes++;data.highest=Math.max(data.highest,data.current);data.current++;updateCheckoutFloor(live);}else{data.failures++;data.current=data.floor;}
+  saveHub();render();
+}
+
+function finishOpenTraining(){
+  const live=hub.trainingLive;if(!live)return;
+  if(live.type==='checkout121'){
+    const d=live.data;return completeTraining({highestTarget:d.highest,attempts:d.attempts,successes:d.successes,failures:d.failures,successRate:d.attempts?d.successes/d.attempts*100:0,safeFloor:d.floor});
+  }
+}
+
+function submitHundredBatch(event){
+  event.preventDefault();const live=hub.trainingLive;if(live?.type!=='hundred')return;
+  const form=new FormData(event.currentTarget),data=live.data,segment=data.segments[data.segmentIndex];
+  const s=Math.max(0,Number(form.get('single'))||0),d=Math.max(0,Number(form.get('double'))||0),t=segment.target==='Bull'?0:Math.max(0,Number(form.get('triple'))||0),m=Math.max(0,Number(form.get('miss'))||0),count=s+d+t+m,remaining=segment.limit-data.segmentDarts;
+  if(count<1||count>Math.min(10,remaining))return toast(`Wpisz od 1 do ${Math.min(10,remaining)} lotek`);
+  data.singles+=s;data.doubles+=d;data.triples+=t;data.misses+=m;data.totalDarts+=count;data.segmentDarts+=count;data.points+=s+d*2+t*3;data.rounds.push({target:segment.target,s,d,t,m,points:s+d*2+t*3});
+  if(data.segmentDarts>=segment.limit){data.segmentIndex++;data.segmentDarts=0;}
+  if(data.segmentIndex>=data.segments.length){const hits=data.singles+data.doubles+data.triples;const maxPoints=data.segments.reduce((sum,item)=>sum+item.limit*(item.target==='Bull'?2:3),0);return completeTraining({score:data.points,totalDarts:data.totalDarts,hitRate:data.totalDarts?hits/data.totalDarts*100:0,maxPoints,singles:data.singles,doubles:data.doubles,triples:data.triples,misses:data.misses});}
+  saveHub();render();
+}
+
+function submitJdcShanghai(event){
+  event.preventDefault();const live=hub.trainingLive;if(live?.type!=='jdc')return;
+  const form=new FormData(event.currentTarget),data=live.data,task=data.sequence[data.index];
+  const s=Math.max(0,Number(form.get('single'))||0),d=Math.max(0,Number(form.get('double'))||0),t=Math.max(0,Number(form.get('triple'))||0),m=Math.max(0,Number(form.get('miss'))||0);
+  if(s+d+t+m!==3)return toast('W rundzie Shanghai zapisz dokładnie 3 lotki');
+  const shanghai=s>0&&d>0&&t>0,points=s*task.target+d*task.target*2+t*task.target*3+(shanghai?100:0);
+  data.score+=points;if(shanghai)data.shanghais++;data.rounds.push({label:task.label,s,d,t,m,shanghai,points});advanceJdc(live);
+}
+
+function submitJdcDouble(hit){
+  const live=hub.trainingLive;if(live?.type!=='jdc')return;
+  const data=live.data,task=data.sequence[data.index];if(hit){data.score+=50;data.doublesHit++;}data.rounds.push({label:task.label,hit,points:hit?50:0});advanceJdc(live);
+}
+
+function advanceJdc(live){
+  live.data.index++;
+  if(live.data.index>=live.data.sequence.length)return completeTraining({score:live.data.score,shanghais:live.data.shanghais,doublesHit:live.data.doublesHit,totalTasks:live.data.sequence.length});
+  saveHub();render();
+}
+
+function submitHalveRound(event){
+  event.preventDefault();const live=hub.trainingLive;if(live?.type!=='halveit')return;
+  const points=Math.max(0,Number(new FormData(event.currentTarget).get('points'))||0),data=live.data,target=HALVE_IT_TARGETS[data.index];
+  if(points===0){data.score=Math.floor(data.score/2);data.misses++;}else data.score+=points;
+  data.rounds.push({target:target.label,points,score:data.score});data.index++;
+  if(data.index>=HALVE_IT_TARGETS.length)return completeTraining({finalScore:data.score,misses:data.misses,rounds:HALVE_IT_TARGETS.length});
+  saveHub();render();
+}
+
+function normalRandom(mean,sd){
+  const u=Math.max(Number.EPSILON,Math.random()),v=Math.max(Number.EPSILON,Math.random());
+  return mean+Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v)*sd;
+}
+
+function newDartbotLeg(data,settings){
+  data.completedLegs++;data.legNumber++;data.playerRemaining=Number(settings.startScore)||501;data.botRemaining=Number(settings.startScore)||501;
+  data.turn=data.completedLegs%2===0?'player':'bot';
+  if(data.completedLegs>=(Number(settings.legsCount)||5))return true;
+  if(data.turn==='bot')setTimeout(()=>dartbotTurn(),50);
+  return false;
+}
+
+function finishDartbotTraining(live){
+  const d=live.data;completeTraining({playerLegs:d.playerLegs,botLegs:d.botLegs,playerAverage:d.playerDarts?d.playerScore/d.playerDarts*3:0,botAverage:d.botDarts?d.botScore/d.botDarts*3:0,totalLegs:d.completedLegs,visits:d.visits.length});
+}
+
+function submitDartbotVisit(event){
+  event.preventDefault();const live=hub.trainingLive;if(live?.type!=='dartbot')return;const data=live.data;if(data.turn!=='player')return;
+  const form=new FormData(event.currentTarget),score=Math.max(0,Math.min(180,Number(form.get('score'))||0)),darts=Math.max(1,Math.min(3,Number(form.get('darts'))||3));
+  const before=data.playerRemaining,after=before-score,bust=score>before||after===1,checkout=after===0;
+  const counted=bust?0:score;data.playerScore+=counted;data.playerDarts+=darts;data.visits.push({who:'player',score:counted,bust,checkout,remaining:bust?before:after,darts});
+  if(checkout){data.playerLegs++;if(newDartbotLeg(data,live.settings))return finishDartbotTraining(live);saveHub();render();return;}
+  if(!bust)data.playerRemaining=after;data.turn='bot';saveHub();render();setTimeout(()=>dartbotTurn(),250);
+}
+
+function dartbotTurn(){
+  const live=hub.trainingLive;if(live?.type!=='dartbot')return;const data=live.data;if(data.turn!=='bot')return;
+  const avg=Number(live.settings.botAverage)||50,before=data.botRemaining;
+  const checkoutChance=Math.max(.04,Math.min(.62,(avg-20)/130));
+  let score=0,checkout=false,darts=3;
+  if(before<=170&&before!==169&&before!==168&&before!==166&&before!==165&&before!==163&&before!==162&&before!==159&&Math.random()<checkoutChance){score=before;checkout=true;darts=1+Math.floor(Math.random()*3);}else{
+    score=Math.max(0,Math.min(180,Math.round(normalRandom(avg,Math.max(12,avg*.28)))));
+    if(score>before||before-score===1)score=Math.max(0,Math.min(before-2,score));
+  }
+  data.botScore+=score;data.botDarts+=darts;data.botRemaining=checkout?0:before-score;data.visits.push({who:'bot',score,checkout,remaining:data.botRemaining,darts});
+  if(checkout){data.botLegs++;if(newDartbotLeg(data,live.settings))return finishDartbotTraining(live);saveHub();render();return;}
+  data.turn='player';saveHub();render();
+}
+
+function submitSession45Stage(event){
+  event.preventDefault();const live=hub.trainingLive;if(live?.type!=='session45')return;const form=new FormData(event.currentTarget),data=live.data,stage=SESSION_45_STAGES[data.index];
+  data.notes.push({stage:stage.title,note:String(form.get('note')||'').trim(),completedAt:new Date().toISOString()});
+  if(data.index>=SESSION_45_STAGES.length-1){data.rating=Math.max(1,Math.min(10,Number(form.get('rating'))||7));return completeTraining({completedStages:SESSION_45_STAGES.length,rating:data.rating,notes:data.notes});}
+  data.index++;saveHub();render();
+}
+
 function loadDemo() {
   if((state.players.length||state.matches.length)&&!confirm('Dane demo zastąpią tylko aktualnie otwartą rozgrywkę. Pozostałe ligi i turnieje pozostaną bez zmian. Kontynuować?'))return;
   const currentId = state.id;
@@ -2415,13 +2951,16 @@ function importData(event) {
         competitions,
         activeCompetitionId:competitions.some(c=>c.id===imported.activeCompetitionId)?imported.activeCompetitionId:competitions[0].id,
         singleMatches:Array.isArray(imported.singleMatches)?imported.singleMatches.map(normalizeSingleMatchRecord):[],
-        singleLive:normalizeSingleLive(imported.singleLive)
+        singleLive:normalizeSingleLive(imported.singleLive),
+        trainingSessions:Array.isArray(imported.trainingSessions)?imported.trainingSessions.map(normalizeTrainingSession):[],
+        trainingLive:normalizeTrainingLive(imported.trainingLive),
+        trainingProfileName:String(imported.trainingProfileName||'')
       };
     }else if(imported.settings&&Array.isArray(imported.players)&&Array.isArray(imported.matches)){
       const competition=normalizeCompetition(imported);
-      nextHub={version:APP_VERSION,activeCompetitionId:competition.id,competitions:[competition],singleMatches:[],singleLive:null,createdAt:competition.createdAt,updatedAt:new Date().toISOString()};
+      nextHub={version:APP_VERSION,activeCompetitionId:competition.id,competitions:[competition],singleMatches:[],singleLive:null,trainingSessions:[],trainingLive:null,trainingProfileName:'',createdAt:competition.createdAt,updatedAt:new Date().toISOString()};
     }else throw new Error('format');
-    if(!confirm('Import zastąpi całe obecne archiwum lig, turniejów i pojedynczych meczów. Kontynuować?'))return;
+    if(!confirm('Import zastąpi całe obecne archiwum lig, turniejów, pojedynczych meczów i treningów. Kontynuować?'))return;
     hub=nextHub;
     state=hub.competitions.find(c=>c.id===hub.activeCompetitionId)||hub.competitions[0];
     progressCompetition();
@@ -2430,7 +2969,7 @@ function importData(event) {
 }
 
 function resetAll() {
-  if(!confirm('Usunąć całe archiwum: wszystkie ligi, turnieje, pojedyncze mecze, zawodników i wyniki?'))return;
+  if(!confirm('Usunąć całe archiwum: wszystkie ligi, turnieje, pojedyncze mecze, treningi, zawodników i wyniki?'))return;
   if(!confirm('To ostatnie potwierdzenie. Tej operacji nie można cofnąć.'))return;
   hub=defaultHub();state=hub.competitions[0];saveHub();route='home';render();toast('Całe archiwum zostało usunięte');
 }
@@ -2447,7 +2986,7 @@ async function installApp() {
 window.addEventListener('beforeinstallprompt',event=>{event.preventDefault();deferredInstallPrompt=event;updateInstallButton();});
 window.addEventListener('appinstalled',()=>{deferredInstallPrompt=null;toast('Aplikacja została zainstalowana');});
 
-if('serviceWorker' in navigator){window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js?v=1.4.0').catch(console.error));}
+if('serviceWorker' in navigator){window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js?v=1.5.0').catch(console.error));}
 
 if (progressCompetition()) saveState();
 render();

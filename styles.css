@@ -1148,3 +1148,26 @@ body:has(.tablet-queue-fixed){
     grid-template-columns:72px minmax(0,1fr)!important;
   }
 }
+
+
+/* =========================================================
+   DartLiga 1.9.4 — Screen Wake Lock for tablet stations
+   ========================================================= */
+.sr-only{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important}
+.tablet-wake-lock{
+  width:38px;height:38px;flex:0 0 38px;display:grid;place-items:center;padding:0;
+  border:1px solid var(--line);border-radius:12px;background:#0b1220;color:var(--muted);
+  transition:border-color .18s ease,background .18s ease,color .18s ease,box-shadow .18s ease;
+}
+.tablet-wake-lock svg{width:21px;height:21px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.tablet-wake-lock svg .wake-screen{stroke-width:1.45;opacity:.55}
+.tablet-wake-lock:hover{color:#fff;border-color:#64748b}
+.tablet-wake-lock.active{color:#86efac;border-color:rgba(34,197,94,.7);background:rgba(34,197,94,.12);box-shadow:0 0 0 4px rgba(34,197,94,.08),0 0 22px rgba(34,197,94,.16)}
+.tablet-wake-lock.requesting,.tablet-wake-lock.idle{color:#facc15;border-color:rgba(250,204,21,.5);background:rgba(250,204,21,.08)}
+.tablet-wake-lock.error{color:#fca5a5;border-color:rgba(239,68,68,.65);background:rgba(239,68,68,.1)}
+.tablet-wake-lock.disabled{color:#64748b;background:#0a101d}
+.tablet-wake-lock.unsupported,.tablet-wake-lock:disabled{cursor:not-allowed;opacity:.45}
+@media(max-width:720px){
+  .tablet-control-actions{gap:5px}
+  .tablet-wake-lock{width:34px;height:34px;flex-basis:34px}
+}

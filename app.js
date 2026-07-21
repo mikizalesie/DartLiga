@@ -2,7 +2,7 @@
 
 const LEGACY_STORAGE_KEY = 'dartliga_pwa_state_v1';
 const STORAGE_KEY = 'dartliga_pwa_hub_v2';
-const APP_VERSION = '1.9.3';
+const APP_VERSION = '1.9.4';
 let route = 'home';
 let matchFilter = 'all';
 let tableGroup = 'all';
@@ -19,6 +19,10 @@ let tabletCompetitionId = null;
 let tabletRefreshTimer = null;
 let firebaseRemoteApplying = false;
 let firebaseSyncStatus = {state:'connecting', message:'Łączenie z Firebase…'};
+const WAKE_LOCK_PREF_KEY = 'dartliga_tablet_keep_screen_awake';
+let tabletWakeLock = null;
+let tabletWakeLockEnabled = localStorage.getItem(WAKE_LOCK_PREF_KEY) !== 'false';
+let tabletWakeLockState = 'idle';
 const TABLET_ROUTE_BY_MODE = {score:'tabletScore', entry:'tabletEntry', queue:'tabletQueue'};
 const TABLET_MODE_BY_ROUTE = {tabletScore:'score', tabletEntry:'entry', tabletQueue:'queue'};
 
@@ -841,6 +845,114 @@ function forceFirebaseDownload() {
   toast('Pobieranie danych z Firebase');
 }
 
+function tabletWakeLockSupported() {
+  return Boolean(navigator?.wakeLock?.request);
+}
+
+function tabletWakeLockActive() {
+  return Boolean(tabletWakeLock && !tabletWakeLock.released);
+}
+
+function tabletWakeLockLabel() {
+  if (!tabletWakeLockSupported()) return 'Blokada wygaszania nie jest obsługiwana';
+  if (!tabletWakeLockEnabled) return 'Włącz niewygaszanie ekranu';
+  if (tabletWakeLockActive()) return 'Ekran nie będzie wygaszany';
+  if (tabletWakeLockState === 'error') return 'Nie udało się zablokować wygaszania — kliknij, aby spróbować ponownie';
+  return 'Włączanie niewygaszania ekranu…';
+}
+
+function tabletWakeLockMarkup() {
+  const supported = tabletWakeLockSupported();
+  const active = tabletWakeLockActive();
+  const stateClass = !supported ? 'unsupported' : (active ? 'active' : (tabletWakeLockEnabled ? tabletWakeLockState : 'disabled'));
+  const label = tabletWakeLockLabel();
+  return `<button type="button" class="tablet-wake-lock ${stateClass}" id="tabletWakeLock" aria-pressed="${active?'true':'false'}" title="${esc(label)}" ${supported?'':'disabled'}>
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2v2M12 20v2M4.93 4.93l1.42 1.42M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.42-1.41M17.66 6.34l1.41-1.41"/><circle cx="12" cy="12" r="4.25"/><path class="wake-screen" d="M5.5 7.5h13v10h-13z"/></svg>
+    <span class="sr-only">${esc(label)}</span>
+  </button>`;
+}
+
+function updateTabletWakeLockUI() {
+  const current = $('#tabletWakeLock');
+  if (!current) return;
+  const holder = document.createElement('div');
+  holder.innerHTML = tabletWakeLockMarkup();
+  const next = holder.firstElementChild;
+  current.replaceWith(next);
+  next?.addEventListener('click', toggleTabletWakeLock);
+}
+
+async function requestTabletWakeLock({silent = true} = {}) {
+  if (!isTabletRoute() || !tabletWakeLockEnabled || document.visibilityState !== 'visible') return false;
+  if (!tabletWakeLockSupported()) {
+    tabletWakeLockState = 'unsupported';
+    updateTabletWakeLockUI();
+    if (!silent) toast('Ta przeglądarka nie obsługuje blokady wygaszania ekranu');
+    return false;
+  }
+  if (tabletWakeLockActive()) {
+    tabletWakeLockState = 'active';
+    updateTabletWakeLockUI();
+    return true;
+  }
+  tabletWakeLockState = 'requesting';
+  updateTabletWakeLockUI();
+  try {
+    const lock = await navigator.wakeLock.request('screen');
+    tabletWakeLock = lock;
+    tabletWakeLockState = 'active';
+    lock.addEventListener('release', () => {
+      if (tabletWakeLock === lock) tabletWakeLock = null;
+      tabletWakeLockState = tabletWakeLockEnabled ? 'idle' : 'disabled';
+      updateTabletWakeLockUI();
+    }, {once:true});
+    updateTabletWakeLockUI();
+    return true;
+  } catch (error) {
+    tabletWakeLock = null;
+    tabletWakeLockState = 'error';
+    updateTabletWakeLockUI();
+    console.warn('Nie udało się włączyć Screen Wake Lock:', error);
+    if (!silent) toast('System nie pozwolił zablokować wygaszania. Wyłącz oszczędzanie baterii i spróbuj ponownie.');
+    return false;
+  }
+}
+
+async function releaseTabletWakeLock({preservePreference = true} = {}) {
+  if (!preservePreference) {
+    tabletWakeLockEnabled = false;
+    localStorage.setItem(WAKE_LOCK_PREF_KEY, 'false');
+  }
+  const lock = tabletWakeLock;
+  tabletWakeLock = null;
+  tabletWakeLockState = tabletWakeLockEnabled ? 'idle' : 'disabled';
+  updateTabletWakeLockUI();
+  if (!lock || lock.released) return;
+  try { await lock.release(); } catch (error) { console.warn('Nie udało się zwolnić Screen Wake Lock:', error); }
+}
+
+async function toggleTabletWakeLock() {
+  if (!tabletWakeLockSupported()) return toast('Ta przeglądarka nie obsługuje blokady wygaszania ekranu');
+  if (tabletWakeLockEnabled) {
+    await releaseTabletWakeLock({preservePreference:false});
+    toast('Automatyczne niewygaszanie ekranu wyłączone');
+    return;
+  }
+  tabletWakeLockEnabled = true;
+  tabletWakeLockState = 'idle';
+  localStorage.setItem(WAKE_LOCK_PREF_KEY, 'true');
+  const enabled = await requestTabletWakeLock({silent:false});
+  if (enabled) toast('Ekran tabletu nie będzie wygaszany');
+}
+
+function maintainTabletWakeLock() {
+  if (!isTabletRoute()) {
+    releaseTabletWakeLock({preservePreference:true});
+    return;
+  }
+  if (tabletWakeLockEnabled) requestTabletWakeLock({silent:true});
+}
+
 function tabletViewLabel(mode = currentTabletMode()) {
   return ({score:'Tylko wynik', entry:'Wpisywanie punktów', queue:'Mecze na tarczy'})[mode] || 'Widok tarczy';
 }
@@ -900,6 +1012,7 @@ function scheduleTabletRefresh() {
 
 function exitTabletView() {
   clearTimeout(tabletRefreshTimer);
+  releaseTabletWakeLock({preservePreference:true});
   const url = new URL(window.location.href);
   url.searchParams.delete('tablet');
   url.searchParams.delete('board');
@@ -957,6 +1070,7 @@ function tabletTopbar(mode = currentTabletMode()) {
     <div><span>Tarcza ${tabletBoardNumber}</span><strong>${esc(tabletViewLabel(mode))}</strong><small>${esc(state.settings.competitionName)}</small></div>
     <div class="tablet-control-actions">
       ${firebaseStatusMarkup(true)}
+      ${tabletWakeLockMarkup()}
       <button class="btn small ghost" id="tabletRefresh">Odśwież</button>
       <button class="btn small ghost" id="tabletFullscreen">Pełny ekran</button>
       <button class="btn small danger" id="tabletExit">Wróć</button>
@@ -1364,9 +1478,11 @@ function render() {
     bindCurrentPage();
     scheduleTabletRefresh();
     updateInstallButton();
+    maintainTabletWakeLock();
     return;
   }
   clearTimeout(tabletRefreshTimer);
+  releaseTabletWakeLock({preservePreference:true});
   document.body.classList.remove('tablet-mode');
   const navigation = roleNavigation();
   app.innerHTML = `
@@ -2487,6 +2603,7 @@ function scorePlayer(playerId, stats) {
 }
 
 function bindCurrentPage() {
+  $('#tabletWakeLock')?.addEventListener('click', toggleTabletWakeLock);
   $('#tabletFullscreen')?.addEventListener('click', async () => {
     try {
       if (!document.fullscreenElement) await document.documentElement.requestFullscreen();
@@ -4378,6 +4495,13 @@ async function installApp() {
   deferredInstallPrompt.prompt();await deferredInstallPrompt.userChoice;deferredInstallPrompt=null;render();
 }
 
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && isTabletRoute() && tabletWakeLockEnabled) {
+    requestTabletWakeLock({silent:true});
+  }
+});
+window.addEventListener('pagehide', () => { releaseTabletWakeLock({preservePreference:true}); });
+
 window.addEventListener('beforeinstallprompt',event=>{event.preventDefault();deferredInstallPrompt=event;updateInstallButton();});
 window.addEventListener('appinstalled',()=>{deferredInstallPrompt=null;toast('Aplikacja została zainstalowana');});
 window.addEventListener('storage', event => {
@@ -4397,7 +4521,7 @@ window.addEventListener('dartliga-firebase-hub', event => {
 window.addEventListener('dartliga-firebase-ready', () => {
   firebaseBridge()?.bootstrap?.(clone(hub));
 });
-if('serviceWorker' in navigator){window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js?v=1.9.1').catch(console.error));}
+if('serviceWorker' in navigator){window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js?v=1.9.4').catch(console.error));}
 
 applyStartupTabletView();
 if (!isTabletRoute() && progressCompetition()) saveState();

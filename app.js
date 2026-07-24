@@ -2,7 +2,7 @@
 
 const LEGACY_STORAGE_KEY = 'dartliga_pwa_state_v1';
 const STORAGE_KEY = 'dartliga_pwa_hub_v2';
-const APP_VERSION = '1.9.4';
+const APP_VERSION = '1.9.5';
 let route = 'home';
 let matchFilter = 'all';
 let tableGroup = 'all';
@@ -13,6 +13,8 @@ let deferredInstallPrompt = null;
 let newCompetitionPanelOpen = false;
 let trainingSetupType = null;
 let dartbotTimer = null;
+let scoreCelebrationTimer = null;
+let matchFinalizeTimer = null;
 let tabletBoardNumber = 1;
 let tabletMode = null;
 let tabletCompetitionId = null;
@@ -1003,11 +1005,14 @@ function scheduleTabletRefresh() {
   const current = scorerLive();
   const hasPendingEntry = route === 'tabletEntry' && (current?.pendingDarts?.length || current?.pendingSegment);
   if (hasPendingEntry) return;
+  const celebration = activeScoreCelebration(current);
+  const normalDelay = route === 'tabletEntry' ? 2500 : 1200;
+  const refreshDelay = celebration ? Math.max(normalDelay, celebration.remainingMs + 120) : normalDelay;
   tabletRefreshTimer = setTimeout(() => {
     if (!isTabletRoute()) return;
     reloadTabletData();
     render();
-  }, route === 'tabletEntry' ? 2500 : 1200);
+  }, refreshDelay);
 }
 
 function exitTabletView() {
@@ -1117,6 +1122,116 @@ function liveDisplayedRemaining(live, playerId) {
   return evaluation.bust ? stored : evaluation.remainingAfter;
 }
 
+const SCORE_CELEBRATION_DURATION = 5600;
+
+function celebrationPlayerName(live, playerId) {
+  if (live?.playerNames?.[playerId]) return String(live.playerNames[playerId]);
+  if (live?.mode === 'dartbot-training') {
+    return playerId === live.playerA
+      ? String(hub.trainingLive?.playerName || 'Zawodnik')
+      : 'Dartbot';
+  }
+  return playerName(playerId);
+}
+
+function visitFinishedOnBullseye(visit) {
+  const throws = Array.isArray(visit?.throws) ? visit.throws : [];
+  const finalDart = throws.at(-1);
+  return Boolean(
+    visit?.checkout && finalDart &&
+    (finalDart.label === 'DBULL' || (Number(finalDart.segment) === 25 && finalDart.multiplier === 'D'))
+  );
+}
+
+function activeScoreCelebration(live) {
+  const visit = Array.isArray(live?.visits) ? live.visits.at(-1) : null;
+  if (!visit || visit.bust) return null;
+
+  let type = null;
+  let title = '';
+  let subtitle = '';
+
+  if (visit.checkout && Number(visit.remainingBefore) === 170) {
+    type = 'big-fish';
+    title = 'BIG FISH FINISH';
+    subtitle = '170';
+  } else if (visitFinishedOnBullseye(visit)) {
+    type = 'bullseye';
+    title = 'BULLSEYE FINISH';
+    subtitle = 'Czerwony środek';
+  } else if (Number(visit.score) === 180) {
+    type = 'maximum';
+    title = '180';
+    subtitle = 'MAXIMUM';
+  }
+
+  if (!type) return null;
+
+  const occurredAt = Date.parse(visit.at || '');
+  if (!Number.isFinite(occurredAt)) return null;
+  const age = Date.now() - occurredAt;
+  if (age < -15000 || age >= SCORE_CELEBRATION_DURATION) return null;
+
+  return {
+    id: `${visit.at || ''}|${visit.playerId || ''}|${type}`,
+    type,
+    title,
+    subtitle,
+    playerName: celebrationPlayerName(live, visit.playerId),
+    remainingMs: Math.max(100, SCORE_CELEBRATION_DURATION - Math.max(0, age))
+  };
+}
+
+function celebrationGraphic(type) {
+  if (type === 'big-fish') {
+    return `<svg class="score-celebration-icon fish-icon" viewBox="0 0 180 100" aria-hidden="true">
+      <path d="M28 50c24-28 64-36 98-16l28-22-4 30 4 30-28-22c-34 20-74 12-98-16l-20 16 20 16Z"/>
+      <circle cx="116" cy="39" r="4"/>
+      <path d="M66 50c15-10 31-10 46 0M47 35c6 10 6 20 0 30"/>
+    </svg>`;
+  }
+  if (type === 'bullseye') {
+    return `<svg class="score-celebration-icon bullseye-icon" viewBox="0 0 120 120" aria-hidden="true">
+      <circle cx="60" cy="60" r="48"/><circle cx="60" cy="60" r="33"/><circle cx="60" cy="60" r="18"/><circle class="bull-center" cx="60" cy="60" r="8"/>
+      <path d="M91 29 62 58M82 23l15-1-1 15"/>
+    </svg>`;
+  }
+  return `<svg class="score-celebration-icon maximum-icon" viewBox="0 0 180 100" aria-hidden="true">
+    <g transform="translate(8 8) rotate(-8 42 42)"><path d="M12 42h68"/><path d="m18 42-14-12v24Z"/><path d="m78 42 18-10-8 10 8 10Z"/></g>
+    <g transform="translate(42 1)"><path d="M12 42h68"/><path d="m18 42-14-12v24Z"/><path d="m78 42 18-10-8 10 8 10Z"/></g>
+    <g transform="translate(77 10) rotate(8 42 42)"><path d="M12 42h68"/><path d="m18 42-14-12v24Z"/><path d="m78 42 18-10-8 10 8 10Z"/></g>
+  </svg>`;
+}
+
+function scheduleScoreCelebrationExpiry(celebration) {
+  clearTimeout(scoreCelebrationTimer);
+  if (!celebration) {
+    scoreCelebrationTimer = null;
+    return;
+  }
+  scoreCelebrationTimer = setTimeout(() => {
+    scoreCelebrationTimer = null;
+    if (document.visibilityState === 'visible') render();
+  }, celebration.remainingMs + 80);
+}
+
+function scoreCelebrationMarkup(live, variant = 'standard') {
+  const celebration = activeScoreCelebration(live);
+  scheduleScoreCelebrationExpiry(celebration);
+  if (!celebration) return '';
+  const sparks = Array.from({length:12},(_,index)=>`<i style="--spark:${index};--angle:${index*30}deg"></i>`).join('');
+  return `<div class="score-celebration ${celebration.type} ${variant === 'scorer' ? 'score-celebration-scorer' : ''}" role="status" aria-live="assertive" aria-label="${esc(celebration.title)} — ${esc(celebration.playerName)}">
+    <div class="score-celebration-glow"></div>
+    <div class="score-celebration-sparks" aria-hidden="true">${sparks}</div>
+    <div class="score-celebration-content">
+      ${celebrationGraphic(celebration.type)}
+      <strong>${esc(celebration.title)}</strong>
+      <span>${esc(celebration.subtitle)}</span>
+      <small>${esc(celebration.playerName)}</small>
+    </div>
+  </div>`;
+}
+
 function tabletPlayerScore(live, playerId) {
   const stats = genericLiveStats(live, playerId);
   const current = live.currentPlayerId === playerId;
@@ -1140,14 +1255,17 @@ function renderTabletScore() {
   return `${tabletTopbar('score')}
     <main class="tablet-score-screen">
       <div class="tablet-match-heading"><span>${esc(boardMatchStage(match))}</span><h1>${esc(boardMatchNames(match))}</h1><p>${esc(matchRuleText(live.legsToWin || matchLegsToWin(match), live.setsToWin || matchSetsToWin(match)))} · ${live.startScore || matchStartScore(match)}</p></div>
-      <div class="tablet-scoreboard">
-        ${tabletPlayerScore(live, live.playerA)}
-        <div class="tablet-score-center">
-          ${setMode?`<div><span>Sety</span><strong>${live.sets?.[live.playerA]||0} : ${live.sets?.[live.playerB]||0}</strong></div>`:''}
-          <div><span>Legi</span><strong>${live.legs?.[live.playerA]||0} : ${live.legs?.[live.playerB]||0}</strong></div>
-          <small>${setMode?`Set ${live.setNumber||1} · `:''}Leg ${live.legNumber||1}</small>
+      <div class="scoreboard-stage tablet-scoreboard-stage">
+        <div class="tablet-scoreboard">
+          ${tabletPlayerScore(live, live.playerA)}
+          <div class="tablet-score-center">
+            ${setMode?`<div><span>Sety</span><strong>${live.sets?.[live.playerA]||0} : ${live.sets?.[live.playerB]||0}</strong></div>`:''}
+            <div><span>Legi</span><strong>${live.legs?.[live.playerA]||0} : ${live.legs?.[live.playerB]||0}</strong></div>
+            <small>${setMode?`Set ${live.setNumber||1} · `:''}Leg ${live.legNumber||1}</small>
+          </div>
+          ${tabletPlayerScore(live, live.playerB)}
         </div>
-        ${tabletPlayerScore(live, live.playerB)}
+        ${scoreCelebrationMarkup(live, 'tablet')}
       </div>
       ${checkout?`<div class="tablet-checkout"><span>Checkout</span><strong>${checkout.map(esc).join(' · ')}</strong></div>`:''}
     </main>`;
@@ -1193,14 +1311,17 @@ function renderTabletQueue() {
           <div><span>Mecz obecny · Tarcza ${tabletBoardNumber}</span><h1>${esc(boardMatchNames(current))}</h1><p>${esc(boardMatchStage(current))} · ${esc(matchRuleText(live.legsToWin || matchLegsToWin(current), live.setsToWin || matchSetsToWin(current)))}</p></div>
           <strong>${esc(state.settings.competitionName)}</strong>
         </div>
-        <div class="tablet-scoreboard tablet-queue-scoreboard">
-          ${tabletPlayerScore(live, live.playerA)}
-          <div class="tablet-score-center">
-            ${setMode?`<div><span>Sety</span><strong>${live.sets?.[live.playerA]||0} : ${live.sets?.[live.playerB]||0}</strong></div>`:''}
-            <div><span>Legi</span><strong>${live.legs?.[live.playerA]||0} : ${live.legs?.[live.playerB]||0}</strong></div>
-            <small>${setMode?`Set ${live.setNumber||1} · `:''}Leg ${live.legNumber||1}</small>
+        <div class="scoreboard-stage tablet-queue-scoreboard-stage">
+          <div class="tablet-scoreboard tablet-queue-scoreboard">
+            ${tabletPlayerScore(live, live.playerA)}
+            <div class="tablet-score-center">
+              ${setMode?`<div><span>Sety</span><strong>${live.sets?.[live.playerA]||0} : ${live.sets?.[live.playerB]||0}</strong></div>`:''}
+              <div><span>Legi</span><strong>${live.legs?.[live.playerA]||0} : ${live.legs?.[live.playerB]||0}</strong></div>
+              <small>${setMode?`Set ${live.setNumber||1} · `:''}Leg ${live.legNumber||1}</small>
+            </div>
+            ${tabletPlayerScore(live, live.playerB)}
           </div>
-          ${tabletPlayerScore(live, live.playerB)}
+          ${scoreCelebrationMarkup(live, 'tablet')}
         </div>
         ${checkout?`<div class="tablet-checkout tablet-queue-checkout"><span>Checkout</span><strong>${checkout.map(esc).join(' · ')}</strong></div>`:''}
       </section>
@@ -2496,6 +2617,7 @@ function renderScorer() {
   }
   const match = standalone || dartbotTraining ? null : state.matches.find(m=>m.id===live.matchId);
   if (!standalone && !dartbotTraining && !match) return `<section class="card">${empty('Nie znaleziono meczu','Wróć do terminarza.')}</section>`;
+  schedulePendingMatchFinalize(live);
   const setMode = !dartbotTraining && liveUsesSets(live);
   const setsToWin = setMode ? Math.max(1, Number(live.setsToWin) || 1) : 0;
   const statsA = livePlayerStats(live.playerA, live);
@@ -2509,7 +2631,7 @@ function renderScorer() {
     Number(live.pendingSegment) <= 20
       ? Number(live.pendingSegment)
       : null;
-  const playerCanThrow = !dartbotTraining || (live.currentPlayerId === live.playerA && !live.botThinking);
+  const playerCanThrow = !live.pendingFinalize && (!dartbotTraining || (live.currentPlayerId === live.playerA && !live.botThinking));
   const locked = evaluation.bust || evaluation.checkout || pending.length >= 3 || !playerCanThrow;
   const canSubmit = playerCanThrow && (evaluation.bust || evaluation.checkout || pending.length === 3);
   const submitLabel = evaluation.checkout ? 'Zatwierdź checkout' : (evaluation.bust ? 'Zatwierdź BUST' : 'Zatwierdź wizytę');
@@ -2533,14 +2655,17 @@ function renderScorer() {
     )}
     <div class="scorer ${dartbotTraining?'dartbot-scorer':''}">
       ${dartbotTraining ? renderDartbotScorerInfo(live) : ''}
-      <div class="scoreboard">
-        ${scorePlayer(live.playerA, statsA)}
-        <div class="versus"><div class="match-score-center">
-          ${setMode ? `<div class="score-center-line"><span>Sety</span><strong>${live.sets?.[live.playerA] || 0} : ${live.sets?.[live.playerB] || 0}</strong></div>` : ''}
-          <div class="score-center-line"><span>Legi</span><strong>${live.legs[live.playerA]} : ${live.legs[live.playerB]}</strong></div>
-          <div class="muted">${setMode ? `Set ${live.setNumber || 1} · ` : ''}Leg ${live.legNumber}</div>
-        </div></div>
-        ${scorePlayer(live.playerB, statsB)}
+      <div class="scoreboard-stage scorer-scoreboard-stage">
+        <div class="scoreboard">
+          ${scorePlayer(live.playerA, statsA)}
+          <div class="versus"><div class="match-score-center">
+            ${setMode ? `<div class="score-center-line"><span>Sety</span><strong>${live.sets?.[live.playerA] || 0} : ${live.sets?.[live.playerB] || 0}</strong></div>` : ''}
+            <div class="score-center-line"><span>Legi</span><strong>${live.legs[live.playerA]} : ${live.legs[live.playerB]}</strong></div>
+            <div class="muted">${setMode ? `Set ${live.setNumber || 1} · ` : ''}Leg ${live.legNumber}</div>
+          </div></div>
+          ${scorePlayer(live.playerB, statsB)}
+        </div>
+        ${scoreCelebrationMarkup(live, 'scorer')}
       </div>
       ${dartbotTraining && !playerCanThrow ? renderDartbotTurnHint(live) : renderCheckoutHint(live, evaluation)}
       <div class="entry-panel">
@@ -3842,6 +3967,44 @@ function clearPendingDarts() {
   render();
 }
 
+function visitHasSpecialFinishCelebration(visit) {
+  return Boolean(
+    visit?.checkout &&
+    (Number(visit.remainingBefore) === 170 || visitFinishedOnBullseye(visit))
+  );
+}
+
+function schedulePendingMatchFinalize(live = scorerLive()) {
+  clearTimeout(matchFinalizeTimer);
+  matchFinalizeTimer = null;
+  const pending = live?.pendingFinalize;
+  if (!pending?.winnerId) return;
+  if (!(route === 'scorer' || route === 'tabletEntry' || isSingleScorer() || isDartbotScorer())) return;
+
+  const delay = Math.max(0, Number(pending.dueAt) - Date.now());
+  matchFinalizeTimer = setTimeout(() => {
+    matchFinalizeTimer = null;
+    const current = scorerLive();
+    if (!current?.pendingFinalize || current.pendingFinalize.visitAt !== pending.visitAt) return;
+    const winnerId = current.pendingFinalize.winnerId;
+    current.pendingFinalize = null;
+    finalizeLiveMatch(winnerId);
+  }, delay + 40);
+}
+
+function deferMatchFinalizeForCelebration(live, winnerId, visit) {
+  if (!visitHasSpecialFinishCelebration(visit)) return false;
+  live.pendingFinalize = {
+    winnerId,
+    visitAt: visit.at,
+    dueAt: Date.now() + SCORE_CELEBRATION_DURATION
+  };
+  saveScorerState();
+  render();
+  schedulePendingMatchFinalize(live);
+  return true;
+}
+
 function checkoutWouldFinishMatch(live, playerId) {
   if (!live) return false;
   const nextLegs = (live.legs?.[playerId] || 0) + 1;
@@ -3911,6 +4074,7 @@ function submitScore(event) {
         live.sets=live.sets||{[live.playerA]:0,[live.playerB]:0};
         live.sets[pid]=(live.sets[pid]||0)+1;
         if(live.sets[pid]>=Math.max(1,Number(live.setsToWin)||1)){
+          if(deferMatchFinalizeForCelebration(live,pid,visit))return;
           finalizeLiveMatch(pid);return;
         }
         live.legs[live.playerA]=0;
@@ -3924,6 +4088,7 @@ function submitScore(event) {
       }
     }else{
       if(live.legs[pid]>=Number(live.legsToWin || 2)){
+        if(deferMatchFinalizeForCelebration(live,pid,visit))return;
         finalizeLiveMatch(pid);return;
       }
       advanceLiveToNextLeg(live);
@@ -4018,6 +4183,7 @@ function summarizeLivePlayer(pid, live=scorerLive()) {
 function undoVisit() {
   const live=scorerLive();if(!live?.undo.length)return;
   if(dartbotTimer){clearTimeout(dartbotTimer);dartbotTimer=null;}
+  if(matchFinalizeTimer){clearTimeout(matchFinalizeTimer);matchFinalizeTimer=null;}
   const stack=live.undo.slice();const previous=stack.pop();
   if(isSingleScorer()) hub.singleLive={...previous,undo:stack};
   else if(isDartbotScorer()) hub.trainingLive.data={...previous,undo:stack,botThinking:false};

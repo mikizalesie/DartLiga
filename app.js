@@ -2,7 +2,7 @@
 
 const LEGACY_STORAGE_KEY = 'dartliga_pwa_state_v1';
 const STORAGE_KEY = 'dartliga_pwa_hub_v2';
-const APP_VERSION = '2.0.2';
+const APP_VERSION = '2.0.3';
 let route = 'home';
 let matchFilter = 'all';
 let tableGroup = 'all';
@@ -1202,6 +1202,7 @@ function applyFirebaseRemoteHub(remoteHub) {
   const currentCompetitionId = tabletCompetitionId || state?.id || hub.activeCompetitionId;
   const currentMatchId = scorerLive()?.matchId || null;
   const incoming = {...remoteHub, appRole:role, version:APP_VERSION};
+  let remoteScheduleRepaired = false;
 
   firebaseRemoteApplying = true;
   try {
@@ -1212,6 +1213,7 @@ function applyFirebaseRemoteHub(remoteHub) {
       || hub.competitions.find(item => item.id === hub.activeCompetitionId)
       || hub.competitions[0];
     hub.activeCompetitionId = state.id;
+    if (!isTabletRoute()) remoteScheduleRepaired = reconcilePlannedScheduleWithParticipants({silent:true});
 
     if (isTabletRoute()) {
       tabletCompetitionId = state.id;
@@ -1227,6 +1229,7 @@ function applyFirebaseRemoteHub(remoteHub) {
   } finally {
     firebaseRemoteApplying = false;
   }
+  if (remoteScheduleRepaired) firebaseSyncCompetition(state);
   render();
 }
 
@@ -2430,12 +2433,97 @@ function registrationScheduleCandidates(competition = state) {
   return registrationScheduleSelection(competition).selected;
 }
 
+function scheduledParticipantIdsFromMatches(competition = state) {
+  const ids = [];
+  (competition?.matches || []).forEach(match => {
+    [match?.playerA, match?.playerB].forEach(id => {
+      if (id && !ids.includes(id)) ids.push(id);
+    });
+  });
+  return ids;
+}
+
+function expectedRoundRobinRounds(playerCount) {
+  const count = Math.max(0, Math.floor(Number(playerCount) || 0));
+  if (count < 2) return 0;
+  return count % 2 === 0 ? count - 1 : count;
+}
+
+function expectedRoundRobinMatches(playerCount) {
+  const count = Math.max(0, Math.floor(Number(playerCount) || 0));
+  return count < 2 ? 0 : count * (count - 1) / 2;
+}
+
+function desiredScheduleParticipantIds(competition = state) {
+  const players = Array.isArray(competition?.players) ? competition.players : [];
+  const playerIds = new Set(players.map(player => player.id));
+  const maxPlayers = competitionMaxPlayers(competition);
+  if (competition?.registrations?.length) {
+    return [...new Set(registrationScheduleCandidates(competition)
+      .map(item => item.playerId)
+      .filter(id => id && playerIds.has(id)))]
+      .slice(0, maxPlayers);
+  }
+  return players.slice(0, maxPlayers).map(player => player.id);
+}
+
 function competitionSchedulePlayers(competition = state) {
   const players = Array.isArray(competition?.players) ? competition.players : [];
-  const ids = Array.isArray(competition?.participantIds) ? competition.participantIds.filter(Boolean) : [];
-  if (!ids.length) return players;
-  const allowed = new Set(ids);
-  return players.filter(player => allowed.has(player.id));
+  const storedIds = Array.isArray(competition?.participantIds) ? competition.participantIds.filter(Boolean) : [];
+  if (storedIds.length) {
+    const allowed = new Set(storedIds);
+    return players.filter(player => allowed.has(player.id));
+  }
+  if (competition?.matches?.length) {
+    const scheduledIds = scheduledParticipantIdsFromMatches(competition);
+    if (scheduledIds.length) {
+      const allowed = new Set(scheduledIds);
+      return players.filter(player => allowed.has(player.id));
+    }
+  }
+  const desiredIds = desiredScheduleParticipantIds(competition);
+  if (desiredIds.length) {
+    const allowed = new Set(desiredIds);
+    return players.filter(player => allowed.has(player.id));
+  }
+  return players.slice(0, competitionMaxPlayers(competition));
+}
+
+function canReconcilePlannedSchedule(competition = state) {
+  if (!competition?.matches?.length) return false;
+  if (!['league','groups'].includes(competition.settings?.format)) return false;
+  if (competition.live) return false;
+  return !competition.matches.some(match => match.status === 'live' || match.status === 'completed');
+}
+
+function reconcilePlannedScheduleWithParticipants(options = {}) {
+  if (!canReconcilePlannedSchedule(state)) return false;
+  if (state.registrations?.length) syncEligibleRegistrationsToPlayers({silent:true});
+  const desiredIds = desiredScheduleParticipantIds(state);
+  if (desiredIds.length < 2) return false;
+  const currentIds = scheduledParticipantIdsFromMatches(state);
+  const sameRoster = desiredIds.length === currentIds.length && desiredIds.every(id => currentIds.includes(id));
+  let scheduleShapeCorrect = true;
+  if (state.settings.format === 'league') {
+    const expectedMatches = expectedRoundRobinMatches(desiredIds.length);
+    const expectedRounds = expectedRoundRobinRounds(desiredIds.length);
+    const actualMatches = state.matches.filter(match => !match.bye && !match.bracketRound).length;
+    const actualRounds = state.matches.filter(match => !match.bye && !match.bracketRound)
+      .reduce((max, match) => Math.max(max, Number(match.round) || 0), 0);
+    scheduleShapeCorrect = actualMatches === expectedMatches && actualRounds === expectedRounds;
+  }
+  if (sameRoster && scheduleShapeCorrect && state.participantIds?.length === desiredIds.length) return false;
+  state.participantIds = desiredIds.slice(0, competitionMaxPlayers(state));
+  state.matches = [];
+  state.live = null;
+  buildSchedule();
+  state.updatedAt = new Date().toISOString();
+  if (!options.silent) {
+    const rounds = state.settings.format === 'league' ? expectedRoundRobinRounds(state.participantIds.length) : null;
+    const matches = state.settings.format === 'league' ? expectedRoundRobinMatches(state.participantIds.length) : state.matches.filter(match => !match.bye).length;
+    toast(`Terminarz dostosowany do ${state.participantIds.length} uczestników${rounds ? ` · ${rounds} kolejek · ${matches} meczów` : ''}`);
+  }
+  return true;
 }
 
 function prepareCompetitionParticipantsFromPayments(competition = state) {
@@ -2589,9 +2677,10 @@ function finalizeRegistrationMutation(registration, message, extra = []) {
   registration.updatedAt = new Date().toISOString();
   const playerListChanged = removeRegistrationPlayerIfIneligible(registration);
   const maintenance = refreshRegistrationStatuses(state);
-  persistRegistrationChanges([registration, ...extra, ...maintenance], {syncCompetition:playerListChanged});
+  const scheduleChanged = reconcilePlannedScheduleWithParticipants({silent:true});
+  persistRegistrationChanges([registration, ...extra, ...maintenance], {syncCompetition:playerListChanged || scheduleChanged});
   render();
-  if (message) toast(message);
+  if (message) toast(scheduleChanged ? `${message} · terminarz zaktualizowany` : message);
 }
 
 function registrationAction(id, action) {
@@ -2960,8 +3049,12 @@ function renderMatches() {
   const filters = [
     ['all','Wszystkie'],['planned','Do rozegrania'],['live','W trakcie'],['completed','Wyniki']
   ];
+  const scheduledPlayers = competitionSchedulePlayers(state).length;
+  const leagueScheduleInfo = state.settings.format === 'league' && scheduledPlayers >= 2
+    ? ` · uczestnicy: ${scheduledPlayers} · kolejki: ${expectedRoundRobinRounds(scheduledPlayers)} · mecze: ${expectedRoundRobinMatches(scheduledPlayers)}`
+    : '';
   return `
-    ${pageHeader('Terminarz', `Mecze — ${esc(state.settings.competitionName)}`, `Dostępne tarcze: ${competitionBoardsCount(state)} · zajęte: ${occupiedBoardsCount(state)}. Tarcze są przypisane w terminarzu z góry. ${isOrganizer()?'Możesz zmienić przypisanie przed meczem lub w trakcie, o ile wybrana tarcza jest wolna.':'Wybierz mecz przypisany do wolnej tarczy i rozpocznij punktację.'}`, allLiveEntries().some(entry=>entry.kind==='competition') ? '<button class="btn primary" data-route="live">Wyniki na żywo</button>' : '')}
+    ${pageHeader('Terminarz', `Mecze — ${esc(state.settings.competitionName)}`, `Dostępne tarcze: ${competitionBoardsCount(state)} · zajęte: ${occupiedBoardsCount(state)}${leagueScheduleInfo}. Tarcze są przypisane w terminarzu z góry. ${isOrganizer()?'Możesz zmienić przypisanie przed meczem lub w trakcie, o ile wybrana tarcza jest wolna.':'Wybierz mecz przypisany do wolnej tarczy i rozpocznij punktację.'}`, allLiveEntries().some(entry=>entry.kind==='competition') ? '<button class="btn primary" data-route="live">Wyniki na żywo</button>' : '')}
     <div class="tabs">${filters.map(([id,label])=>`<button class="tab ${matchFilter===id?'active':''}" data-match-filter="${id}">${label} <span class="muted">${countFilter(id)}</span></button>`).join('')}</div>
     <section class="card">
       ${matches.length ? `<div class="match-list">${matches.map(matchRow).join('')}</div>` : empty('Brak meczów w tym widoku','Zmień filtr albo wygeneruj terminarz.')}
@@ -3039,8 +3132,12 @@ function renderTables() {
   const standings = computeStandings(selected);
   const qualifiers = state.settings.format === 'groups' ? Math.max(1, Number(state.settings.qualifiersPerGroup) || 1) : 0;
   const generatedQualifierIds = new Set((state.knockout?.qualifiers || []).filter(q=>q.group===selected).map(q=>q.playerId));
+  const leaguePlayers = state.settings.format === 'league' ? competitionSchedulePlayers(state).length : 0;
+  const leagueInfo = leaguePlayers >= 2
+    ? `Uczestnicy: ${leaguePlayers} · ${expectedRoundRobinRounds(leaguePlayers)} kolejek · ${expectedRoundRobinMatches(leaguePlayers)} meczów. `
+    : '';
   return `
-    ${pageHeader('Klasyfikacja', state.settings.format==='groups'?'Tabele grupowe i drabinka':'Tabela ligi', state.settings.format==='groups' ? 'Najlepsi zawodnicy z każdej grupy zostaną automatycznie przeniesieni do fazy pucharowej.' : 'Tabela aktualizuje się automatycznie po zakończeniu każdego meczu.')}
+    ${pageHeader('Klasyfikacja', state.settings.format==='groups'?'Tabele grupowe i drabinka':'Tabela ligi', state.settings.format==='groups' ? 'Najlepsi zawodnicy z każdej grupy zostaną automatycznie przeniesieni do fazy pucharowej.' : `${leagueInfo}Tabela aktualizuje się automatycznie po zakończeniu każdego meczu.`)}
     ${state.settings.format==='groups' ? `<div class="tabs">${groups.map(g=>`<button class="tab ${selected===g?'active':''}" data-table-group="${esc(g)}">Grupa ${esc(g)}</button>`).join('')}</div>` : ''}
     <section class="card">
       ${standings.length ? standingsTable(standings, {qualifiers, generatedQualifierIds}) : empty('Tabela jest pusta','Dodaj zawodników i rozegraj pierwsze mecze.')}
@@ -3958,13 +4055,14 @@ function saveCompetitionSettings(event) {
   }
 
   state.settings = requested;
-  if (oldBoardsCount !== requested.boardsCount) {
+  const scheduleChanged = reconcilePlannedScheduleWithParticipants({silent:true});
+  if (!scheduleChanged && oldBoardsCount !== requested.boardsCount) {
     assignBoardsToMatches(state, state.matches.filter(match=>match.status==='planned' && !match.bye));
   }
   normalizeCompetitionBoardAssignments(state);
   saveState();
   render();
-  toast('Ustawienia zapisane');
+  toast(scheduleChanged ? 'Ustawienia zapisane · terminarz dostosowany do limitu i opłaconych uczestników' : 'Ustawienia zapisane');
 }
 
 function addPlayer(event) {
@@ -4088,7 +4186,10 @@ function generateSchedule() {
   render();
   const selection = registrationScheduleSelection(state);
   const reserveInfo = selection.reserveSelected.length ? `, w tym ${selection.reserveSelected.length} z listy rezerwowej` : '';
-  toast(`${state.settings.format === 'groups' ? 'Faza grupowa' : 'Terminarz'} zapisana dla ${participants.length} uczestników${reserveInfo}.`);
+  const leagueInfo = state.settings.format === 'league'
+    ? ` · ${expectedRoundRobinRounds(participants.length)} kolejek · ${expectedRoundRobinMatches(participants.length)} meczów`
+    : '';
+  toast(`${state.settings.format === 'groups' ? 'Faza grupowa' : 'Terminarz'} zapisana dla ${participants.length} uczestników${reserveInfo}${leagueInfo}.`);
 }
 
 function regenerateSchedule() {
@@ -4109,7 +4210,10 @@ function regenerateSchedule() {
   buildSchedule();
   saveState();
   render();
-  toast(`Terminarz został przebudowany dla ${participants.length} uczestników`);
+  const leagueInfo = state.settings.format === 'league'
+    ? ` · ${expectedRoundRobinRounds(participants.length)} kolejek · ${expectedRoundRobinMatches(participants.length)} meczów`
+    : '';
+  toast(`Terminarz został przebudowany dla ${participants.length} uczestników${leagueInfo}`);
 }
 
 function buildSchedule() {
@@ -5665,5 +5769,9 @@ registrationMaintenanceTimer = setInterval(() => {
 if('serviceWorker' in navigator){window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js?v=2.0.2').catch(console.error));}
 
 applyStartupTabletView();
-if (!isTabletRoute() && progressCompetition()) saveState();
+if (!isTabletRoute()) {
+  const scheduleRepaired = reconcilePlannedScheduleWithParticipants({silent:true});
+  const competitionProgressed = progressCompetition();
+  if (scheduleRepaired || competitionProgressed) saveState();
+}
 render();

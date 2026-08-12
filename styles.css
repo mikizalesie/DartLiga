@@ -1498,7 +1498,7 @@ body:has(.tablet-queue-fixed){
 .registration-info-strip strong,.registration-detail-grid strong{font-size:14px;overflow-wrap:anywhere}
 .registration-admin-card,.registration-my-card{margin-bottom:16px}
 .registration-add-form{margin-bottom:6px}
-.registration-table-wrap{max-height:58vh}.registration-table{min-width:1120px}.registration-table td{vertical-align:middle}.registration-table .row-actions{min-width:190px}
+.registration-table-wrap{max-height:58vh}.registration-table{min-width:1180px}.registration-table td{vertical-align:middle}.registration-table .row-actions{min-width:150px}
 .registration-subline{display:block;color:var(--muted);font-size:11px;margin-top:4px}
 .registration-schedule-card{margin-bottom:16px;border-color:rgba(34,197,94,.35)}
 .registration-detail-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin:14px 0}
@@ -1521,3 +1521,21 @@ body:has(.tablet-queue-fixed){
   .registration-admin-card{padding:16px}
   .registration-table-wrap{max-height:none}
 }
+
+
+/* DartLiga 2.0.1 — automatyczna lista płatności zawodników */
+.registration-sync-summary{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:2px 0 14px}
+.registration-roster-warning{margin:0 0 14px;border-color:rgba(245,158,11,.45);background:rgba(245,158,11,.08)}
+.registration-row-paid{background:linear-gradient(90deg,rgba(34,197,94,.055),transparent 34%)}
+.registration-row-unpaid{background:linear-gradient(90deg,rgba(245,158,11,.035),transparent 30%)}
+.payment-toggle{display:inline-flex;align-items:center;gap:9px;min-width:94px;cursor:pointer;user-select:none;font-weight:900}
+.payment-toggle input{position:absolute;opacity:0;pointer-events:none}
+.payment-toggle-track{position:relative;width:46px;height:26px;border-radius:999px;background:#3a465b;border:1px solid #536078;box-shadow:inset 0 1px 3px rgba(0,0,0,.25);transition:.18s ease}
+.payment-toggle-knob{position:absolute;top:3px;left:3px;width:18px;height:18px;border-radius:50%;background:#f8fafc;box-shadow:0 2px 5px rgba(0,0,0,.35);transition:.18s ease}
+.payment-toggle strong{font-size:12px;letter-spacing:.04em;color:#fbbf24;min-width:25px}
+.payment-toggle input:checked + .payment-toggle-track{background:rgba(34,197,94,.85);border-color:#22c55e}
+.payment-toggle input:checked + .payment-toggle-track .payment-toggle-knob{transform:translateX(20px)}
+.payment-toggle input:checked ~ strong{color:#4ade80}
+.payment-toggle:has(input:focus-visible) .payment-toggle-track{outline:2px solid #38bdf8;outline-offset:2px}
+.payment-toggle.is-disabled{opacity:.48;cursor:not-allowed}
+@media(max-width:700px){.payment-toggle{min-width:82px}.registration-sync-summary{gap:6px}}

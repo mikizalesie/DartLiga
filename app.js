@@ -2,7 +2,7 @@
 
 const LEGACY_STORAGE_KEY = 'dartliga_pwa_state_v1';
 const STORAGE_KEY = 'dartliga_pwa_hub_v2';
-const APP_VERSION = '2.0.3';
+const APP_VERSION = '2.0.4';
 let route = 'home';
 let matchFilter = 'all';
 let tableGroup = 'all';
@@ -978,19 +978,22 @@ let hub = loadHub();
 let state = hub.competitions.find(c => c.id === hub.activeCompetitionId) || hub.competitions[0];
 
 
+const ORGANIZER_NAVIGATION = [
+  ['home','☷','Moje rozgrywki'],
+  ['dashboard','⌂','Pulpit aktywnej'],
+  ['competition','♟','Konfiguracja'],
+  ['registrations','▤','Zapisy i płatności'],
+  ['matches','◉','Mecze'],
+  ['live','●','Na żywo'],
+  ['boardViews','▣','Widoki tarcz'],
+  ['tables','▦','Tabele'],
+  ['stats','↗','Statystyki'],
+  ['settings','⚙','Ustawienia']
+];
+
 const ROLE_NAVIGATION = {
-  organizer: [
-    ['home','☷','Moje rozgrywki'],
-    ['dashboard','⌂','Pulpit aktywnej'],
-    ['competition','♟','Konfiguracja'],
-    ['registrations','▤','Zapisy i płatności'],
-    ['matches','◉','Mecze'],
-    ['live','●','Na żywo'],
-    ['boardViews','▣','Widoki tarcz'],
-    ['tables','▦','Tabele'],
-    ['stats','↗','Statystyki'],
-    ['settings','⚙','Ustawienia']
-  ],
+  organizer: ORGANIZER_NAVIGATION,
+  admin: ORGANIZER_NAVIGATION,
   user: [
     ['home','☷','Moje rozgrywki'],
     ['dashboard','⌂','Pulpit aktywnej'],
@@ -1005,14 +1008,20 @@ const ROLE_NAVIGATION = {
 };
 
 function currentAppRole() {
+  if (hub.appRole === 'admin') return 'admin';
   return hub.appRole === 'user' ? 'user' : 'organizer';
 }
 
+function isAdmin() {
+  return currentAppRole() === 'admin';
+}
+
 function isOrganizer() {
-  return currentAppRole() === 'organizer';
+  return currentAppRole() === 'organizer' || currentAppRole() === 'admin';
 }
 
 function roleLabel(role = currentAppRole()) {
+  if (role === 'admin') return 'Administrator';
   return role === 'organizer' ? 'Organizator' : 'Użytkownik';
 }
 
@@ -1042,7 +1051,7 @@ function roleNavigation(role = currentAppRole()) {
 }
 
 function switchAppRole(nextRole) {
-  const role = nextRole === 'user' ? 'user' : 'organizer';
+  const role = nextRole === 'admin' ? 'admin' : (nextRole === 'user' ? 'user' : 'organizer');
   if (role === currentAppRole()) return;
   hub.appRole = role;
   newCompetitionPanelOpen = false;
@@ -1058,6 +1067,7 @@ function roleSwitcher(compact = false) {
   return `<div class="role-switch ${compact?'compact':''}" role="group" aria-label="Tryb aplikacji">
     <button type="button" data-app-role="organizer" class="${role==='organizer'?'active':''}" title="Tryb organizatora"><span aria-hidden="true">♛</span>${compact?'':`<b>Organizator</b>`}</button>
     <button type="button" data-app-role="user" class="${role==='user'?'active':''}" title="Tryb użytkownika"><span aria-hidden="true">●</span>${compact?'':`<b>Użytkownik</b>`}</button>
+    <button type="button" data-app-role="admin" class="${role==='admin'?'active':''}" title="Tryb administratora — narzędzia awaryjne"><span aria-hidden="true">⚠</span>${compact?'':`<b>Administrator</b>`}</button>
   </div>`;
 }
 
@@ -2158,7 +2168,7 @@ function competitionRow(competition) {
       <button class="btn small primary open-competition" data-id="${competition.id}">${active?'Otwórz pulpit':'Przełącz i otwórz'}</button>
       ${isOrganizer()?`<button class="btn small ghost duplicate-competition" data-id="${competition.id}">Nowa na podstawie</button>${competition.status === 'completed'
         ? `<button class="btn small ghost reopen-competition" data-id="${competition.id}">Wznów</button>`
-        : `<button class="btn small ghost finish-competition" data-id="${competition.id}">Zakończ</button>`}`:''}
+        : `<button class="btn small ghost finish-competition" data-id="${competition.id}">Zakończ</button>`}${isAdmin()?`<button class="btn small danger admin-force-finish" data-id="${competition.id}">${competition.status==='completed'?'Wyczyść aktywne':'Wymuś zakończenie'}</button><button class="btn small danger admin-delete-competition" data-id="${competition.id}">Usuń</button>`:''}`:''}
     </div>
   </article>`;
 }
@@ -3384,6 +3394,7 @@ function renderSettings() {
       <section class="card"><h2>Kopia danych</h2><p class="muted">Eksport obejmuje wszystkie aktywne i zakończone rozgrywki, pojedyncze mecze, zawodników, terminarze, wyniki i statystyki.</p><div class="row-actions"><button class="btn primary" id="exportData">Eksportuj JSON</button><label class="btn info" for="importData">Importuj JSON</label><input id="importData" type="file" accept="application/json" hidden></div></section>
       <section class="card"><h2>Instalacja PWA</h2><p class="muted">Po uruchomieniu przez HTTPS lub lokalny serwer aplikacja może działać jak program i zachować podstawowe pliki offline.</p><button class="btn primary" id="installBtnPage" ${deferredInstallPrompt?'':'disabled'}>Zainstaluj aplikację</button></section>
     </div>
+    ${isAdmin()?`<section class="card admin-maintenance" style="margin-top:16px"><div class="section-head"><div><div class="eyebrow">Administrator</div><h2>Narzędzia awaryjne</h2><p class="muted">Używaj ich do sprzątania testowych lub uszkodzonych stanów rozgrywek. Zakończone wyniki nie są kasowane przez awaryjne zakończenie.</p></div><span class="badge red">ADMIN</span></div><div class="row-actions"><button class="btn danger admin-force-finish" data-id="${state.id}">Wymuś zakończenie bieżącej</button><button class="btn danger admin-delete-competition" data-id="${state.id}">Usuń bieżącą rozgrywkę</button></div></section>`:''}
     <section class="card danger-zone" style="margin-top:16px"><h2 class="red">Strefa niebezpieczna</h2><p class="muted">Usunięcie danych kasuje lokalne archiwum i po synchronizacji może zastąpić dane w projekcie testowym. Przed operacją wykonaj eksport JSON.</p><button class="btn danger" id="resetAll">Usuń całe archiwum</button></section>`;
 }
 
@@ -3771,6 +3782,8 @@ function bindCurrentPage() {
   $$('[data-competition-filter]').forEach(b=>b.addEventListener('click',()=>{competitionFilter=b.dataset.competitionFilter;render();}));
   $$('.open-competition').forEach(b=>b.addEventListener('click',()=>activateCompetition(b.dataset.id,'dashboard')));
   $$('.finish-competition').forEach(b=>b.addEventListener('click',()=>finishCompetition(b.dataset.id)));
+  $$('.admin-force-finish').forEach(b=>b.addEventListener('click',()=>adminForceFinishCompetition(b.dataset.id)));
+  $$('.admin-delete-competition').forEach(b=>b.addEventListener('click',()=>adminDeleteCompetition(b.dataset.id)));
   $$('.reopen-competition').forEach(b=>b.addEventListener('click',()=>reopenCompetition(b.dataset.id)));
   $$('.duplicate-competition').forEach(b=>b.addEventListener('click',()=>duplicateCompetition(b.dataset.id)));
   $('#duplicateCurrentCompetition')?.addEventListener('click',()=>duplicateCompetition(state.id));
@@ -3971,6 +3984,65 @@ function createCompetition(event) {
   saveState();
   render();
   toast('Nowa rozgrywka utworzona');
+}
+
+function requireAdmin(message = 'Ta funkcja jest dostępna wyłącznie w trybie Administrator') {
+  if (isAdmin()) return true;
+  toast(message);
+  return false;
+}
+
+function adminClearCompetitionLiveState(competition) {
+  if (!competition) return 0;
+  let cleared = 0;
+  if (competition.live) {
+    competition.live = null;
+    cleared += 1;
+  }
+  (competition.matches || []).forEach(match => {
+    if (match.status === 'live' || match.liveData) {
+      if (match.status === 'live') match.status = 'planned';
+      match.liveData = null;
+      if (match.startedAt && match.status !== 'completed') match.startedAt = null;
+      cleared += 1;
+    }
+  });
+  return cleared;
+}
+
+function adminForceFinishCompetition(id) {
+  if (!requireAdmin()) return;
+  const competition = hub.competitions.find(c => c.id === id);
+  if (!competition) return;
+  const name = competition.settings?.competitionName || 'Rozgrywka';
+  if (!confirm(`AWARYJNE ZAKOŃCZENIE: „${name}”. Aktywne liczniki zostaną przerwane, a rozpoczęte mecze wrócą do statusu zaplanowanych. Zakończone wyniki pozostaną zapisane. Kontynuować?`)) return;
+  const cleared = adminClearCompetitionLiveState(competition);
+  competition.status = 'completed';
+  competition.completedAt = new Date().toISOString();
+  competition.updatedAt = competition.completedAt;
+  if (competition.id === state.id) state = competition;
+  saveHub({firebase:false});
+  firebaseSyncCompetition(competition);
+  render();
+  toast(`Awaryjnie zakończono rozgrywkę${cleared ? ` · wyczyszczono ${cleared} aktywnych stanów` : ''}`);
+}
+
+function adminDeleteCompetition(id) {
+  if (!requireAdmin()) return;
+  const competition = hub.competitions.find(c => c.id === id);
+  if (!competition) return;
+  const name = competition.settings?.competitionName || 'Rozgrywka';
+  if (!confirm(`ADMINISTRATOR: trwale usunąć „${name}” z tego archiwum? Tej operacji nie można cofnąć bez kopii JSON.`)) return;
+  hub.competitions = hub.competitions.filter(c => c.id !== id);
+  if (!hub.competitions.length) hub.competitions.push(defaultCompetition());
+  if (hub.activeCompetitionId === id || !hub.competitions.some(c => c.id === hub.activeCompetitionId)) {
+    hub.activeCompetitionId = hub.competitions[0].id;
+  }
+  state = hub.competitions.find(c => c.id === hub.activeCompetitionId) || hub.competitions[0];
+  route = 'home';
+  saveHub({firebase:'full'});
+  render();
+  toast('Rozgrywka została usunięta przez administratora');
 }
 
 function finishCompetition(id) {
@@ -5766,7 +5838,7 @@ registrationMaintenanceTimer = setInterval(() => {
   persistRegistrationChanges(changed);
   if (route === 'registrations' || route === 'dashboard' || route === 'home') render();
 }, 60000);
-if('serviceWorker' in navigator){window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js?v=2.0.2').catch(console.error));}
+if('serviceWorker' in navigator){window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js?v=2.0.4').catch(console.error));}
 
 applyStartupTabletView();
 if (!isTabletRoute()) {

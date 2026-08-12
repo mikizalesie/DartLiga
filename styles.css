@@ -1352,10 +1352,10 @@ body:has(.tablet-queue-fixed){
    DartLiga 1.9.6 — celebracje dopasowane do wysokości tablicy
    ========================================================= */
 .scoreboard-stage{
-  container-type:size;
+  container-type:inline-size;
 }
 .score-celebration{
-  padding:clamp(10px,2cqh,24px);
+  padding:clamp(10px,2vh,24px);
 }
 .score-celebration-content{
   width:100%;
@@ -1368,7 +1368,7 @@ body:has(.tablet-queue-fixed){
   flex-direction:column;
   align-items:center;
   justify-content:center;
-  gap:clamp(3px,1.2cqh,12px);
+  gap:clamp(3px,1.2vh,12px);
   overflow:hidden;
 }
 .score-celebration-content>.score-celebration-number{
@@ -1562,3 +1562,35 @@ body:has(.tablet-queue-fixed){
 }
 .payment-date-input{width:170px;min-height:34px;padding:6px 8px;border:1px solid var(--line);border-radius:9px;background:#0b1220;color:var(--text);font-size:12px;font-variant-numeric:tabular-nums}
 .payment-date-input:focus{outline:2px solid rgba(56,189,248,.45);outline-offset:1px;border-color:#38bdf8}
+
+
+/* =========================================================
+   DartLiga 2.0.4 — admin mode + scorer scoreboard hotfix
+   ========================================================= */
+.role-switch{grid-template-columns:repeat(3,minmax(0,1fr))}
+.role-switch button[data-app-role="admin"].active{
+  box-shadow:inset 0 0 0 1px rgba(245,158,11,.72);
+  color:#fde68a;
+  background:rgba(245,158,11,.10);
+}
+.role-switch.compact button{width:34px}
+.scorer-scoreboard-stage{
+  display:block;
+  width:100%;
+  min-width:0;
+  min-height:260px;
+  overflow:hidden;
+}
+.scorer-scoreboard-stage>.scoreboard{
+  width:100%;
+  min-height:260px;
+}
+.admin-maintenance{
+  border-color:rgba(245,158,11,.55);
+  background:linear-gradient(135deg,rgba(245,158,11,.09),rgba(16,24,39,.98));
+}
+.admin-maintenance .eyebrow{color:#fbbf24}
+@media(max-width:760px){
+  .role-switch:not(.compact){grid-template-columns:1fr 1fr 1fr}
+  .scorer-scoreboard-stage,.scorer-scoreboard-stage>.scoreboard{min-height:0}
+}

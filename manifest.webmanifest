@@ -1,7 +1,7 @@
 {
   "name": "DartLiga PWA",
   "short_name": "DartLiga",
-  "description": "DartLiga PWA z synchronizacją Firebase, wynikami na żywo i widokami tabletowymi.",
+  "description": "DartLiga PWA z zapisami na turnieje, obsługą wpisowego, synchronizacją Firebase, wynikami na żywo i widokami tabletowymi.",
   "lang": "pl",
   "start_url": "./",
   "scope": "./",

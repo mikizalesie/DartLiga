@@ -8,12 +8,12 @@
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="description" content="DartLiga PWA – wyniki na żywo i stanowiska tabletowe synchronizowane przez Firebase.">
+  <meta name="description" content="DartLiga PWA – zapisy na turnieje, wpisowe, wyniki na żywo i stanowiska tabletowe synchronizowane przez Firebase.">
   <title>DartLiga PWA</title>
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icons/icon-192.png">
   <link rel="apple-touch-icon" href="icons/icon-192.png">
-  <link rel="stylesheet" href="styles.css?v=1.9.5">
+  <link rel="stylesheet" href="styles.css?v=2.0.0">
 </head>
 <body>
   <div id="app"></div>
@@ -57,8 +57,11 @@
     let remoteHubMeta = null;
     const remoteCompetitions = new Map();
     const remoteMatches = new Map();
+    const remoteRegistrations = new Map();
     const matchSubscriptions = new Map();
+    const registrationSubscriptions = new Map();
     const matchSubscriptionsReady = new Set();
+    const registrationSubscriptionsReady = new Set();
     let competitionsUnsubscribe = null;
     let emitTimer = null;
     let lastEmittedJson = '';
@@ -97,7 +100,7 @@
       const source = clean(hub || {});
       return {
         kind:'hub',
-        version:source.version || '1.9.2',
+        version:source.version || '2.0.0',
         activeCompetitionId:source.activeCompetitionId || null,
         singleMatches:Array.isArray(source.singleMatches) ? source.singleMatches : [],
         singleLive:source.singleLive || null,
@@ -116,6 +119,7 @@
       const payload = clean(competition || {});
       payload.activeLiveMatchId = payload.live?.matchId || null;
       delete payload.matches;
+      delete payload.registrations;
       delete payload.live;
       payload.kind = 'competition';
       payload._clientUpdatedAt = new Date().toISOString();
@@ -127,6 +131,15 @@
     function matchPayload(match) {
       const payload = clean(match || {});
       payload.kind = 'match';
+      payload._clientUpdatedAt = new Date().toISOString();
+      payload._updatedBy = clientId;
+      payload._firebaseUpdatedAt = serverTimestamp();
+      return payload;
+    }
+
+    function registrationPayload(registration) {
+      const payload = clean(registration || {});
+      payload.kind = 'registration';
       payload._clientUpdatedAt = new Date().toISOString();
       payload._updatedBy = clientId;
       payload._firebaseUpdatedAt = serverTimestamp();
@@ -157,6 +170,16 @@
       if (!competitionId || !match?.id) return;
       await setDoc(doc(db,'competitions',competitionId,'matches',match.id),matchPayload(match));
     }
+
+    async function writeRegistration(competitionId, registration) {
+      if (!competitionId || !registration?.id) return;
+      await setDoc(doc(db,'competitions',competitionId,'registrations',registration.id),registrationPayload(registration));
+    }
+
+    async function deleteRegistration(competitionId, registrationId) {
+      if (!competitionId || !registrationId) return;
+      await deleteDoc(doc(db,'competitions',competitionId,'registrations',registrationId));
+    }
     
     async function deleteMissingMatches(competitionId, localMatches) {
       const snapshot = await getDocs(collection(db,'competitions',competitionId,'matches'));
@@ -168,8 +191,19 @@
         await batch.commit();
       }
     }
+
+    async function deleteMissingRegistrations(competitionId, localRegistrations) {
+      const snapshot = await getDocs(collection(db,'competitions',competitionId,'registrations'));
+      const wanted = new Set((localRegistrations || []).map(item => item.id));
+      const missing = snapshot.docs.filter(item => !wanted.has(item.id));
+      for (let offset=0; offset<missing.length; offset+=450) {
+        const batch = writeBatch(db);
+        missing.slice(offset,offset+450).forEach(item => batch.delete(item.ref));
+        await batch.commit();
+      }
+    }
     
-    async function writeCompetition(competition) {
+    async function writeCompetition(competition, includeRegistrations = false) {
       if (!competition?.id) return;
       await setDoc(doc(db,'competitions',competition.id),competitionPayload(competition));
       const matches = Array.isArray(competition.matches) ? competition.matches : [];
@@ -181,8 +215,19 @@
         await batch.commit();
       }
       await deleteMissingMatches(competition.id,matches);
+      if (includeRegistrations) {
+        const registrations = Array.isArray(competition.registrations) ? competition.registrations : [];
+        for (let offset=0; offset<registrations.length; offset+=400) {
+          const batch = writeBatch(db);
+          registrations.slice(offset,offset+400).forEach(item => {
+            if (item?.id) batch.set(doc(db,'competitions',competition.id,'registrations',item.id),registrationPayload(item));
+          });
+          await batch.commit();
+        }
+        await deleteMissingRegistrations(competition.id,registrations);
+      }
     }
-    
+
     async function deleteMissingCompetitions(hub) {
       const snapshot = await getDocs(collection(db,'competitions'));
       const wanted = new Set((hub?.competitions || []).map(item => item.id));
@@ -194,6 +239,12 @@
           matches.docs.slice(offset,offset+450).forEach(match => batch.delete(match.ref));
           await batch.commit();
         }
+        const registrations = await getDocs(collection(db,'competitions',item.id,'registrations'));
+        for (let offset=0; offset<registrations.docs.length; offset+=450) {
+          const batch = writeBatch(db);
+          registrations.docs.slice(offset,offset+450).forEach(registration => batch.delete(registration.ref));
+          await batch.commit();
+        }
         await deleteDoc(item.ref);
       }
     }
@@ -202,20 +253,22 @@
       if (!hub) return;
       dispatchStatus('syncing','Wysyłanie całego archiwum do Firebase…');
       await writeGlobal(hub);
-      for (const competition of hub.competitions || []) await writeCompetition(competition);
+      for (const competition of hub.competitions || []) await writeCompetition(competition, true);
       await deleteMissingCompetitions(hub);
       dispatchStatus('online','Całe archiwum jest zsynchronizowane');
     }
     
     function assembleRemoteHub() {
       if (!remoteHubMeta || !remoteCompetitions.size) return null;
-      if ([...remoteCompetitions.keys()].some(id => !matchSubscriptionsReady.has(id))) return null;
+      if ([...remoteCompetitions.keys()].some(id => !matchSubscriptionsReady.has(id) || !registrationSubscriptionsReady.has(id))) return null;
       const competitions = [...remoteCompetitions.values()].map(raw => {
         const competition = stripMeta(raw);
         const activeLiveMatchId = competition.activeLiveMatchId || null;
         delete competition.activeLiveMatchId;
         const matches = [...(remoteMatches.get(competition.id)?.values() || [])].map(stripMeta);
+        const registrations = [...(remoteRegistrations.get(competition.id)?.values() || [])].map(stripMeta);
         competition.matches = matches;
+        competition.registrations = registrations;
         const selectedLiveMatch = (activeLiveMatchId && matches.find(item => item.id === activeLiveMatchId && item.liveData))
           || matches.find(item => item.status === 'live' && item.liveData)
           || null;
@@ -225,7 +278,7 @@
       const meta = stripMeta(remoteHubMeta);
       return {
         ...meta,
-        version:meta.version || '1.9.1',
+        version:meta.version || '2.0.0',
         competitions,
         activeCompetitionId:competitions.some(item => item.id === meta.activeCompetitionId)
           ? meta.activeCompetitionId
@@ -261,6 +314,21 @@
       matchSubscriptions.set(competitionId,unsubscribe);
     }
     
+    function subscribeRegistrations(competitionId) {
+      if (registrationSubscriptions.has(competitionId)) return;
+      const unsubscribe = onSnapshot(collection(db,'competitions',competitionId,'registrations'), snapshot => {
+        const map = new Map();
+        snapshot.docs.forEach(item => map.set(item.id,item.data()));
+        remoteRegistrations.set(competitionId,map);
+        registrationSubscriptionsReady.add(competitionId);
+        scheduleEmit();
+      }, error => {
+        console.error('Firebase registrations listener',competitionId,error);
+        dispatchStatus('error',error?.message || 'Błąd odczytu zapisów');
+      });
+      registrationSubscriptions.set(competitionId,unsubscribe);
+    }
+
     function startListeners() {
       if (competitionsUnsubscribe) return;
       competitionsUnsubscribe = onSnapshot(collection(db,'competitions'), snapshot => {
@@ -273,14 +341,19 @@
           seen.add(item.id);
           remoteCompetitions.set(item.id,item.data());
           subscribeMatches(item.id);
+          subscribeRegistrations(item.id);
         });
         [...remoteCompetitions.keys()].forEach(id => {
           if (seen.has(id)) return;
           remoteCompetitions.delete(id);
           remoteMatches.delete(id);
+          remoteRegistrations.delete(id);
           matchSubscriptionsReady.delete(id);
+          registrationSubscriptionsReady.delete(id);
           matchSubscriptions.get(id)?.();
           matchSubscriptions.delete(id);
+          registrationSubscriptions.get(id)?.();
+          registrationSubscriptions.delete(id);
         });
         dispatchStatus('online','Połączono — nasłuchiwanie zmian w czasie rzeczywistym');
         scheduleEmit();
@@ -330,6 +403,9 @@
         const matches = await getDocs(collection(db,'competitions',id,'matches'));
         remoteMatches.set(id,new Map(matches.docs.map(item => [item.id,item.data()])));
         matchSubscriptionsReady.add(id);
+        const registrations = await getDocs(collection(db,'competitions',id,'registrations'));
+        remoteRegistrations.set(id,new Map(registrations.docs.map(item => [item.id,item.data()])));
+        registrationSubscriptionsReady.add(id);
       }
       const hub = assembleRemoteHub();
       if (hub) window.dispatchEvent(new CustomEvent('dartliga-firebase-hub',{detail:{hub}}));
@@ -349,6 +425,14 @@
       syncMatch(competitionId,match) {
         if (!authenticated || !competitionId || !match?.id) return;
         queueWrite(`match:${competitionId}:${match.id}`,()=>writeMatch(competitionId,match),100);
+      },
+      syncRegistration(competitionId,registration) {
+        if (!authenticated || !competitionId || !registration?.id) return;
+        queueWrite(`registration:${competitionId}:${registration.id}`,()=>writeRegistration(competitionId,registration),100);
+      },
+      deleteRegistration(competitionId,registrationId) {
+        if (!authenticated || !competitionId || !registrationId) return;
+        queueWrite(`registration-delete:${competitionId}:${registrationId}`,()=>deleteRegistration(competitionId,registrationId),50);
       },
       syncFull(hub) {
         if (!authenticated) return;
@@ -378,6 +462,6 @@
       }
     });
   </script>
-  <script src="app.js?v=1.9.5"></script>
+  <script src="app.js?v=2.0.0"></script>
 </body>
 </html>

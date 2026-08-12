@@ -1,9 +1,9 @@
-const CACHE = 'dartliga-pwa-v1.9.5';
+const CACHE = 'dartliga-pwa-v2.0.0';
 const ASSETS = [
   './',
   './index.html',
-  './styles.css?v=1.9.5',
-  './app.js?v=1.9.5',
+  './styles.css?v=2.0.0',
+  './app.js?v=2.0.0',
   './manifest.webmanifest',
   './icons/icon-192.png',
   './icons/icon-512.png'

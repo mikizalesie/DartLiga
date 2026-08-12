@@ -1174,7 +1174,7 @@ body:has(.tablet-queue-fixed){
 
 
 /* =========================================================
-   DartLiga 1.9.5 — animated score celebrations
+   DartLiga 1.9.6 — fitted score celebrations
    ========================================================= */
 .scoreboard-stage{
   position:relative;
@@ -1345,4 +1345,179 @@ body:has(.tablet-queue-fixed){
 }
 @media(prefers-reduced-motion:reduce){
   .score-celebration,.score-celebration-content,.score-celebration-glow,.score-celebration-sparks i{animation:none!important}
+}
+
+
+/* =========================================================
+   DartLiga 1.9.6 — celebracje dopasowane do wysokości tablicy
+   ========================================================= */
+.scoreboard-stage{
+  container-type:size;
+}
+.score-celebration{
+  padding:clamp(10px,2cqh,24px);
+}
+.score-celebration-content{
+  width:100%;
+  height:100%;
+  max-width:100%;
+  max-height:100%;
+  min-width:0;
+  min-height:0;
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  justify-content:center;
+  gap:clamp(3px,1.2cqh,12px);
+  overflow:hidden;
+}
+.score-celebration-content>.score-celebration-number{
+  display:block!important;
+  margin:0;
+  padding:0;
+  max-width:96%;
+  font-size:clamp(118px,27vw,390px)!important;
+  line-height:.76!important;
+  font-weight:1000;
+  letter-spacing:-.075em!important;
+  text-align:center;
+  background:linear-gradient(180deg,#fffde1 0%,#fde047 48%,#f59e0b 100%);
+  -webkit-background-clip:text;
+  background-clip:text;
+  color:transparent;
+  filter:drop-shadow(0 14px 34px rgba(0,0,0,.42));
+}
+.score-celebration-finish-icon{
+  flex:0 1 auto;
+  display:grid;
+  place-items:center;
+  min-height:0;
+  max-height:34%;
+}
+.score-celebration-finish-icon .score-celebration-icon{
+  width:clamp(66px,10vw,145px);
+  max-height:100%;
+  margin:0;
+}
+.score-celebration-finish-title{
+  display:flex!important;
+  flex-direction:column;
+  align-items:center;
+  justify-content:center;
+  gap:0;
+  margin:0;
+  padding:0 clamp(8px,2vw,24px);
+  width:100%;
+  max-width:100%;
+  min-width:0;
+  font-size:clamp(38px,7.2vw,112px)!important;
+  line-height:.84!important;
+  font-weight:1000;
+  letter-spacing:-.045em!important;
+  text-align:center;
+  text-transform:uppercase;
+  text-wrap:nowrap;
+  filter:drop-shadow(0 12px 30px rgba(0,0,0,.42));
+}
+.score-celebration-finish-title>span{
+  display:block;
+  width:100%;
+  white-space:nowrap;
+}
+.score-celebration.big-fish .score-celebration-finish-title{
+  background:linear-gradient(180deg,#ecfeff,#67e8f9 55%,#818cf8);
+  -webkit-background-clip:text;
+  background-clip:text;
+  color:transparent;
+}
+.score-celebration.bullseye .score-celebration-finish-title{
+  background:linear-gradient(180deg,#fff1f2,#fb7185 55%,#dc2626);
+  -webkit-background-clip:text;
+  background-clip:text;
+  color:transparent;
+}
+.score-celebration.maximum .score-celebration-icon,
+.score-celebration.maximum .score-celebration-content>span,
+.score-celebration.maximum .score-celebration-content>small{
+  display:none!important;
+}
+@supports (font-size:1cqh){
+  .score-celebration-content>.score-celebration-number{
+    font-size:min(37cqw,72cqh,410px)!important;
+  }
+  .score-celebration-finish-icon .score-celebration-icon{
+    width:min(13cqw,28cqh,155px);
+  }
+  .score-celebration-finish-title{
+    font-size:min(10.5cqw,23cqh,118px)!important;
+  }
+  .score-celebration-scorer .score-celebration-content>.score-celebration-number{
+    font-size:min(34cqw,67cqh,330px)!important;
+  }
+  .score-celebration-scorer .score-celebration-finish-title{
+    font-size:min(9.2cqw,20cqh,92px)!important;
+  }
+}
+@media(max-width:760px){
+  .score-celebration-finish-title{
+    font-size:clamp(34px,11vw,70px)!important;
+  }
+  .score-celebration-content>.score-celebration-number{
+    font-size:clamp(110px,34vw,250px)!important;
+  }
+}
+
+/* =========================================================
+   DartLiga 2.0.0 — Zapisy i płatności
+   ========================================================= */
+.field textarea{
+  width:100%;
+  background:#0b1220;
+  border:1px solid var(--line);
+  color:#fff;
+  border-radius:11px;
+  padding:11px 12px;
+  outline:none;
+  resize:vertical;
+  min-height:78px;
+  font:inherit;
+}
+.field textarea:focus{border-color:var(--primary);box-shadow:0 0 0 3px rgba(34,197,94,.12)}
+.money-input{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:stretch}
+.money-input input{border-radius:11px 0 0 11px!important}
+.money-input span{display:grid;place-items:center;padding:0 12px;border:1px solid var(--line);border-left:0;border-radius:0 11px 11px 0;background:var(--panel-3);font-size:12px;font-weight:900;color:#cbd5e1}
+.check-field{display:flex;gap:11px;align-items:flex-start;padding:11px 12px;border:1px solid var(--line);border-radius:12px;background:#0b1220;cursor:pointer}
+.check-field input{width:18px;height:18px;margin:2px 0 0;accent-color:var(--primary)}
+.check-field span{display:grid;gap:3px}.check-field b{font-size:13px}.check-field small{color:var(--muted);line-height:1.35}
+.registration-kpis{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:14px;margin-bottom:16px}
+.registration-kpis .card{padding:16px;min-width:0}.registration-kpis .stat-value{font-size:clamp(24px,3vw,34px);overflow-wrap:anywhere}
+.registration-kpis .registration-money{font-size:clamp(22px,2.5vw,32px)}
+.registration-info-strip{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:16px}
+.registration-info-strip>div{display:grid;gap:5px;padding:8px 10px;border-right:1px solid var(--line);min-width:0}.registration-info-strip>div:last-child{border-right:0}
+.registration-info-strip span,.registration-detail-grid span{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.07em;font-weight:850}
+.registration-info-strip strong,.registration-detail-grid strong{font-size:14px;overflow-wrap:anywhere}
+.registration-admin-card,.registration-my-card{margin-bottom:16px}
+.registration-add-form{margin-bottom:6px}
+.registration-table-wrap{max-height:58vh}.registration-table{min-width:1120px}.registration-table td{vertical-align:middle}.registration-table .row-actions{min-width:190px}
+.registration-subline{display:block;color:var(--muted);font-size:11px;margin-top:4px}
+.registration-schedule-card{margin-bottom:16px;border-color:rgba(34,197,94,.35)}
+.registration-detail-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin:14px 0}
+.registration-detail-grid>div{display:grid;gap:5px;padding:12px;border:1px solid var(--line);border-radius:12px;background:#0b1220}
+.registration-payment-note{margin-top:12px}
+.registration-readonly-value{display:flex;align-items:center;min-height:44px;padding:10px 12px;border:1px solid var(--line);border-radius:11px;background:#0b1220;font-weight:900}
+.registration-config-note{margin-bottom:14px}
+.link-button{border:0;background:transparent;color:#86efac;font:inherit;font-weight:900;padding:0;text-decoration:underline;text-underline-offset:2px;cursor:pointer}
+@media(max-width:1250px){
+  .registration-kpis{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .registration-info-strip{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .registration-info-strip>div:nth-child(2){border-right:0}
+}
+@media(max-width:760px){
+  .registration-kpis{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+  .registration-kpis .card:last-child{grid-column:1/-1}
+  .registration-info-strip,.registration-detail-grid{grid-template-columns:1fr}
+  .registration-info-strip>div{border-right:0;border-bottom:1px solid var(--line)}
+  .registration-info-strip>div:last-child{border-bottom:0}
+  .registration-admin-card{padding:16px}
+  .registration-table-wrap{max-height:none}
 }

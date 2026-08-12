@@ -1539,3 +1539,26 @@ body:has(.tablet-queue-fixed){
 .payment-toggle:has(input:focus-visible) .payment-toggle-track{outline:2px solid #38bdf8;outline-offset:2px}
 .payment-toggle.is-disabled{opacity:.48;cursor:not-allowed}
 @media(max-width:700px){.payment-toggle{min-width:82px}.registration-sync-summary{gap:6px}}
+
+/* DartLiga 2.0.2 — lista podstawowa / rezerwowa i historia płatności */
+.registration-table{min-width:1380px}
+.registration-list-divider td{padding:10px 14px!important;background:linear-gradient(90deg,rgba(56,189,248,.16),rgba(56,189,248,.035));border-top:2px solid rgba(56,189,248,.5);border-bottom:1px solid rgba(56,189,248,.25)}
+.registration-list-divider td span{display:block;color:#7dd3fc;font-size:12px;font-weight:950;letter-spacing:.12em;text-transform:uppercase}
+.registration-list-divider td small{display:block;margin-top:3px;color:var(--muted);font-size:11px;letter-spacing:0;text-transform:none}
+.registration-list-divider.inactive td{background:rgba(148,163,184,.055);border-top-color:rgba(148,163,184,.35)}
+.registration-list-divider.inactive td span{color:#cbd5e1}
+.registration-row-reserve{background:linear-gradient(90deg,rgba(56,189,248,.05),transparent 36%)}
+.registration-row-promoted{box-shadow:inset 4px 0 0 #22c55e;background:linear-gradient(90deg,rgba(34,197,94,.12),rgba(56,189,248,.035) 48%,transparent)}
+.registration-row-inactive{opacity:.7;background:rgba(148,163,184,.025)}
+.registration-subline.reserve-copy{color:#7dd3fc;font-weight:750}
+.registration-subline.base-copy{color:#86efac}
+.registration-status-stack{display:flex;flex-wrap:wrap;gap:5px;align-items:center;min-width:150px}
+.payment-date-cell{white-space:nowrap;font-variant-numeric:tabular-nums}
+.registration-table th:nth-child(7){min-width:142px}
+.registration-table th:nth-child(8){min-width:142px}
+@media(max-width:700px){
+  .registration-table{min-width:1320px}
+  .registration-list-divider td{padding:9px 10px!important}
+}
+.payment-date-input{width:170px;min-height:34px;padding:6px 8px;border:1px solid var(--line);border-radius:9px;background:#0b1220;color:var(--text);font-size:12px;font-variant-numeric:tabular-nums}
+.payment-date-input:focus{outline:2px solid rgba(56,189,248,.45);outline-offset:1px;border-color:#38bdf8}

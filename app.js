@@ -2,7 +2,7 @@
 
 const LEGACY_STORAGE_KEY = 'dartliga_pwa_state_v1';
 const STORAGE_KEY = 'dartliga_pwa_hub_v2';
-const APP_VERSION = '2.0.1';
+const APP_VERSION = '2.0.2';
 let route = 'home';
 let matchFilter = 'all';
 let tableGroup = 'all';
@@ -79,6 +79,7 @@ function defaultCompetition(overrides = {}) {
     },
     players: [],
     registrations: [],
+    participantIds: [],
     matches: [],
     live: null,
     knockout: {
@@ -109,6 +110,7 @@ function defaultCompetition(overrides = {}) {
     settings,
     players: Array.isArray(overrides.players) ? overrides.players : base.players,
     registrations: Array.isArray(overrides.registrations) ? overrides.registrations : base.registrations,
+    participantIds: Array.isArray(overrides.participantIds) ? overrides.participantIds : base.participantIds,
     matches: Array.isArray(overrides.matches) ? overrides.matches : base.matches,
     live: overrides.live || null,
     knockout: {
@@ -500,6 +502,14 @@ function normalizeRegistration(value = {}) {
   const allowedStatuses = new Set(['registered','payment_pending','paid','confirmed','payment_expired','waitlist','cancelled','refunded','rejected']);
   const status = allowedStatuses.has(value.status) ? value.status : (feeSnapshot > 0 ? 'payment_pending' : 'confirmed');
   const defaultPaymentStatus = status === 'refunded' ? 'refunded' : (status === 'paid' ? 'paid' : (status === 'confirmed' && feeSnapshot <= 0 ? 'not_required' : 'pending'));
+  const paymentHistory = Array.isArray(value.paymentHistory)
+    ? value.paymentHistory.filter(item => item && item.at).slice(-100).map(item => ({
+        type:String(item.type || 'event'),
+        at:String(item.at),
+        amount:Number(item.amount ?? feeSnapshot) || 0,
+        note:String(item.note || '').slice(0,160)
+      }))
+    : [];
   return {
     ...value,
     id: value.id || uid('r'),
@@ -519,6 +529,7 @@ function normalizeRegistration(value = {}) {
     refundedAt: value.refundedAt || null,
     rejectedAt: value.rejectedAt || null,
     waitlistPosition: Number(value.waitlistPosition) > 0 ? Math.floor(Number(value.waitlistPosition)) : null,
+    paymentHistory,
     notes: String(value.notes || '').slice(0,500),
     updatedAt: value.updatedAt || value.registeredAt || now
   };
@@ -553,12 +564,115 @@ function registrationPaymentDeadline(competition = state, from = new Date()) {
   return new Date(from.getTime() + hours * 3600000).toISOString();
 }
 
+function registrationIsTerminal(registration) {
+  return ['cancelled','refunded','rejected','payment_expired'].includes(registration?.status);
+}
+
 function registrationOccupiesSeat(registration) {
-  return ['registered','payment_pending','paid','confirmed'].includes(registration?.status);
+  return !registrationIsTerminal(registration);
 }
 
 function registrationIsEligible(registration) {
-  return ['paid','confirmed'].includes(registration?.status);
+  if (!registration || registrationIsTerminal(registration)) return false;
+  return registration.paymentStatus === 'paid' || registration.status === 'confirmed' || Boolean(registration.confirmedAt);
+}
+
+function registrationRosterOrder(competition = state) {
+  const registrations = Array.isArray(competition?.registrations) ? competition.registrations : [];
+  const players = Array.isArray(competition?.players) ? competition.players : [];
+  const playerOrder = new Map(players.map((player,index) => [player.id,index]));
+  return registrations.filter(registrationOccupiesSeat).slice().sort((a,b) => {
+    const aIndex = a.playerId && playerOrder.has(a.playerId) ? playerOrder.get(a.playerId) : Number.MAX_SAFE_INTEGER;
+    const bIndex = b.playerId && playerOrder.has(b.playerId) ? playerOrder.get(b.playerId) : Number.MAX_SAFE_INTEGER;
+    return aIndex - bIndex
+      || String(a.registeredAt || '').localeCompare(String(b.registeredAt || ''))
+      || String(a.id || '').localeCompare(String(b.id || ''));
+  });
+}
+
+function registrationRosterSplit(competition = state) {
+  const maxPlayers = competitionMaxPlayers(competition);
+  const active = registrationRosterOrder(competition);
+  return {
+    active,
+    base:active.slice(0,maxPlayers),
+    reserve:active.slice(maxPlayers),
+    maxPlayers
+  };
+}
+
+function registrationIsReserve(registration, competition = state) {
+  return registrationRosterSplit(competition).reserve.some(item => item.id === registration?.id);
+}
+
+function registrationReservePosition(registration, competition = state) {
+  const index = registrationRosterSplit(competition).reserve.findIndex(item => item.id === registration?.id);
+  return index >= 0 ? index + 1 : null;
+}
+
+function registrationBasePosition(registration, competition = state) {
+  const index = registrationRosterSplit(competition).base.findIndex(item => item.id === registration?.id);
+  return index >= 0 ? index + 1 : null;
+}
+
+function registrationScheduleSelection(competition = state) {
+  const split = registrationRosterSplit(competition);
+  const baseSelected = split.base.filter(registrationIsEligible);
+  const vacancies = Math.max(0, split.maxPlayers - baseSelected.length);
+  const reserveSelected = split.reserve.filter(registrationIsEligible).slice(0, vacancies);
+  return {
+    ...split,
+    baseSelected,
+    reserveSelected,
+    selected:[...baseSelected, ...reserveSelected],
+    vacancies:Math.max(0, split.maxPlayers - baseSelected.length - reserveSelected.length)
+  };
+}
+
+function normalizeRegistrationRosterStates(competition = state) {
+  const split = registrationRosterSplit(competition);
+  const changed = [];
+  const now = new Date().toISOString();
+  split.base.forEach(item => {
+    let dirty = false;
+    if (item.waitlistPosition !== null) {
+      item.waitlistPosition = null;
+      dirty = true;
+    }
+    if (item.status === 'waitlist') {
+      if (item.paymentStatus === 'paid') item.status = 'paid';
+      else if (item.confirmedAt || Number(item.feeSnapshot) <= 0) item.status = 'confirmed';
+      else item.status = 'payment_pending';
+      dirty = true;
+    }
+    if (dirty) {
+      item.updatedAt = now;
+      changed.push(item);
+    }
+  });
+  split.reserve.forEach((item,index) => {
+    const next = index + 1;
+    if (item.waitlistPosition !== next) {
+      item.waitlistPosition = next;
+      item.updatedAt = now;
+      changed.push(item);
+    }
+  });
+  return changed;
+}
+
+function recordRegistrationPaymentEvent(registration, type, note = '') {
+  if (!registration) return null;
+  if (!Array.isArray(registration.paymentHistory)) registration.paymentHistory = [];
+  const event = {
+    type:String(type || 'event'),
+    at:new Date().toISOString(),
+    amount:Math.max(0, Number(registration.feeSnapshot) || 0),
+    note:String(note || '').slice(0,160)
+  };
+  registration.paymentHistory.push(event);
+  if (registration.paymentHistory.length > 100) registration.paymentHistory = registration.paymentHistory.slice(-100);
+  return event;
 }
 
 function registrationStatusLabel(status) {
@@ -653,6 +767,8 @@ function syncPlayersToRegistrations(options = {}) {
     created += 1;
   });
 
+  normalizeRegistrationRosterStates(state).forEach(item => { if (!changed.includes(item)) changed.push(item); });
+
   if (changed.length) {
     saveState({firebase:false});
     if (!firebaseRemoteApplying) {
@@ -668,25 +784,25 @@ function syncPlayersToRegistrations(options = {}) {
 
 function registrationCounts(competition = state) {
   const registrations = Array.isArray(competition?.registrations) ? competition.registrations : [];
-  const occupied = registrations.filter(registrationOccupiesSeat).length;
+  const split = registrationRosterSplit(competition);
+  const selection = registrationScheduleSelection(competition);
   const paid = registrations.filter(item => item.paymentStatus === 'paid' && item.status !== 'refunded').length;
-  const confirmed = registrations.filter(item => registrationIsEligible(item)).length;
-  const pending = registrations.filter(item => item.status === 'payment_pending').length;
-  const waitlist = registrations.filter(item => item.status === 'waitlist').length;
+  const pending = split.active.filter(item => Number(item.feeSnapshot) > 0 && item.paymentStatus !== 'paid' && !item.confirmedAt).length;
   const collected = registrations
     .filter(item => item.paymentStatus === 'paid' && item.status !== 'refunded')
     .reduce((sum,item) => sum + Math.max(0,Number(item.feeSnapshot)||0), 0);
-  const maxPlayers = competitionMaxPlayers(competition);
   return {
     total: registrations.length,
-    occupied,
-    available: Math.max(0, maxPlayers - occupied),
+    occupied: split.base.length,
+    available: Math.max(0, split.maxPlayers - split.base.length),
     paid,
-    confirmed,
+    confirmed: selection.selected.length,
     pending,
-    waitlist,
+    waitlist: split.reserve.length,
     collected,
-    maxPlayers
+    maxPlayers: split.maxPlayers,
+    baseEligible: selection.baseSelected.length,
+    reserveEligible: selection.reserveSelected.length
   };
 }
 
@@ -706,19 +822,7 @@ function currentDeviceRegistration(competition = state) {
 }
 
 function normalizeWaitlistPositions(competition = state) {
-  const waiting = (competition?.registrations || [])
-    .filter(item => item.status === 'waitlist')
-    .sort((a,b) => String(a.registeredAt || '').localeCompare(String(b.registeredAt || '')));
-  const changed = [];
-  waiting.forEach((item,index) => {
-    const next = index + 1;
-    if (item.waitlistPosition !== next) {
-      item.waitlistPosition = next;
-      item.updatedAt = new Date().toISOString();
-      changed.push(item);
-    }
-  });
-  return changed;
+  return normalizeRegistrationRosterStates(competition);
 }
 
 function refreshRegistrationStatuses(competition = state) {
@@ -738,30 +842,7 @@ function refreshRegistrationStatuses(competition = state) {
       }
     });
   }
-  let counts = registrationCounts(competition);
-  if (competition.settings.waitlistEnabled !== false && counts.available > 0) {
-    const waiting = competition.registrations
-      .filter(item => item.status === 'waitlist')
-      .sort((a,b) => String(a.registeredAt || '').localeCompare(String(b.registeredAt || '')));
-    while (counts.available > 0 && waiting.length) {
-      const item = waiting.shift();
-      if (Number(item.feeSnapshot) > 0) {
-        item.status = 'payment_pending';
-        item.paymentStatus = 'pending';
-        item.paymentDeadline = registrationPaymentDeadline(competition);
-      } else {
-        item.status = 'confirmed';
-        item.paymentStatus = 'not_required';
-        item.confirmedAt = new Date().toISOString();
-        item.paymentDeadline = null;
-      }
-      item.waitlistPosition = null;
-      item.updatedAt = new Date().toISOString();
-      changed.push(item);
-      counts = registrationCounts(competition);
-    }
-  }
-  normalizeWaitlistPositions(competition).forEach(item => { if (!changed.includes(item)) changed.push(item); });
+  normalizeRegistrationRosterStates(competition).forEach(item => { if (!changed.includes(item)) changed.push(item); });
   return changed;
 }
 
@@ -791,6 +872,7 @@ function normalizeCompetition(value = {}) {
     settings: value.settings || {},
     players: Array.isArray(value.players) ? value.players : [],
     registrations: Array.isArray(value.registrations) ? value.registrations.map(normalizeRegistration) : [],
+    participantIds: Array.isArray(value.participantIds) ? value.participantIds.filter(Boolean) : [],
     matches: [],
     live: value.live || null,
     knockout: value.knockout || {}
@@ -2095,7 +2177,7 @@ function renderDashboard() {
     ${pageHeader('Centrum rozgrywek', esc(state.settings.competitionName), `${formatLabel(state.settings.format)} · ${competitionFormatSummary(state)} · start ${formatDateTime(state.startedAt)}`, `<button class="btn ghost" data-route="home">Wszystkie rozgrywki</button>${isOrganizer()?'<button class="btn info" data-new-competition>+ Nowa rozgrywka</button>':''}<button class="btn info" data-route="registrations">${isOrganizer()?'Zapisy i płatności':'Zapisz się'}</button><button class="btn primary" data-route="matches">Mecze</button>`)}
     ${knockoutInfo ? `<div class="note safe-note" style="margin-bottom:16px"><strong>${knockoutInfo}</strong>${state.settings.format==='groups' ? ` · awansuje ${state.settings.qualifiersPerGroup} zawodników z każdej grupy.` : ''}</div>` : ''}
     <div class="grid stats">
-      ${statCard('Zawodnicy', state.players.length, 'aktywnych w rozgrywkach')}
+      ${statCard('Uczestnicy', state.participantIds?.length ? competitionSchedulePlayers(state).length : state.players.length, state.participantIds?.length ? `z limitu ${competitionMaxPlayers(state)}` : 'na liście rozgrywki')}
       ${statCard('Zapisy', `${registrationCounts(state).occupied}/${registrationCounts(state).maxPlayers}`, `wpisowe ${formatMoney(competitionEntryFee(state),state.settings.currency||'PLN')}`)}
       ${statCard('Mecze zakończone', completed.length, `z ${state.matches.filter(m=>!m.bye).length} zaplanowanych`)}
       ${statCard('Do rozegrania', planned.length, live.length ? `${live.length} mecz w trakcie` : 'brak aktywnego meczu')}
@@ -2171,7 +2253,7 @@ function renderCompetition() {
       </section>
       <section class="card">
         <div class="section-head"><h2>Zawodnicy</h2><span class="badge green">${state.players.length}</span></div>
-        ${state.registrations?.length?`<div class="note safe-note registration-config-note"><strong>Zapisy online/ręczne: ${registrationCounts(state).confirmed} opłaconych lub potwierdzonych.</strong> <button class="link-button" type="button" data-route="registrations">Otwórz zapisy i płatności</button></div>`:''}
+        ${state.registrations?.length?`<div class="note safe-note registration-config-note"><strong>Do terminarza: ${registrationCounts(state).confirmed}/${registrationCounts(state).maxPlayers} opłaconych lub potwierdzonych.</strong> <button class="link-button" type="button" data-route="registrations">Otwórz zapisy i płatności</button></div>`:''}
         <form id="playerForm" class="inline-form">
           <div class="field"><label>Imię i nazwisko / pseudonim</label><input name="playerName" maxlength="50" placeholder="np. Michał M." required></div>
           ${format === 'groups' ? `<div class="field"><label>Grupa</label><select name="playerGroup"><option value="">Automatycznie</option>${groups.map(g=>`<option>${g}</option>`).join('')}</select></div>` : ''}
@@ -2186,7 +2268,7 @@ function renderCompetition() {
       <div class="section-head"><div><h2>Terminarz tej rozgrywki</h2><p class="muted">Obecnie: ${state.matches.filter(m=>!m.bye).length} meczów, ${completedMatches} zakończonych.</p></div><div class="row-actions">
         ${format==='groups' && !hasSchedule ? '<button class="btn info" id="autoGroups">Rozdziel grupy</button>' : ''}
         ${!hasSchedule
-          ? `<button class="btn primary" id="generateSchedule" ${(state.players.length + registrationScheduleCandidates(state).filter(item=>!item.playerId).length)<2?'disabled':''}>Generuj terminarz</button>`
+          ? `<button class="btn primary" id="generateSchedule" ${registrationScheduleCandidates(state).length<2?'disabled':''}>Generuj terminarz</button>`
           : `<button class="btn" disabled>Terminarz zapisany</button>${canRegenerate ? '<button class="btn danger" id="regenerateSchedule">Przebuduj zaplanowany terminarz</button>' : ''}<button class="btn info" data-new-competition>+ Nowa rozgrywka</button>`}
       </div></div>
       ${!hasSchedule
@@ -2345,7 +2427,28 @@ function liveEntryCard(entry) {
 
 
 function registrationScheduleCandidates(competition = state) {
-  return (competition?.registrations || []).filter(registrationIsEligible);
+  return registrationScheduleSelection(competition).selected;
+}
+
+function competitionSchedulePlayers(competition = state) {
+  const players = Array.isArray(competition?.players) ? competition.players : [];
+  const ids = Array.isArray(competition?.participantIds) ? competition.participantIds.filter(Boolean) : [];
+  if (!ids.length) return players;
+  const allowed = new Set(ids);
+  return players.filter(player => allowed.has(player.id));
+}
+
+function prepareCompetitionParticipantsFromPayments(competition = state) {
+  if (!competition) return [];
+  if (competition.registrations?.length) syncEligibleRegistrationsToPlayers({silent:true});
+  const hasRegistrations = Boolean(competition.registrations?.length);
+  const candidates = hasRegistrations ? registrationScheduleCandidates(competition) : [];
+  const ids = hasRegistrations
+    ? candidates.map(item => item.playerId).filter(id => id && competition.players.some(player => player.id === id))
+    : (competition.players || []).slice(0,competitionMaxPlayers(competition)).map(player => player.id);
+  competition.participantIds = [...new Set(ids)].slice(0,competitionMaxPlayers(competition));
+  const allowed = new Set(competition.participantIds);
+  return (competition.players || []).filter(player => allowed.has(player.id));
 }
 
 function syncEligibleRegistrationsToPlayers(options = {}) {
@@ -2383,7 +2486,10 @@ function syncEligibleRegistrationsToPlayers(options = {}) {
     }
   }
   if (!options.silent) {
-    toast(created.length ? `Dodano ${created.length} opłaconych/potwierdzonych uczestników do listy zawodników` : 'Lista zawodników jest już zgodna z opłaconymi zapisami');
+    const selection = registrationScheduleSelection(state);
+    toast(created.length
+      ? `Dodano ${created.length} uczestników do listy zawodników. Do terminarza kwalifikuje się ${selection.selected.length}/${selection.maxPlayers}.`
+      : `Lista zawodników jest zsynchronizowana. Do terminarza kwalifikuje się ${selection.selected.length}/${selection.maxPlayers}.`);
   }
   return created.length;
 }
@@ -2502,27 +2608,28 @@ function registrationAction(id, action) {
   }
   if (!requireOrganizer()) return;
   if (action === 'paid') {
-    if (registration.status === 'waitlist') return toast('Najpierw uczestnik musi otrzymać wolne miejsce');
-    registration.status = 'paid';
+    const reserve = registrationIsReserve(registration,state);
+    registration.status = reserve ? 'waitlist' : 'paid';
     registration.paymentStatus = 'paid';
     registration.paidAt = new Date().toISOString();
     registration.paymentDeadline = null;
-    registration.waitlistPosition = null;
-    return finalizeRegistrationMutation(registration,'Płatność oznaczona jako opłacona');
+    recordRegistrationPaymentEvent(registration,'paid','Oznaczono jako opłacone przez organizatora');
+    return finalizeRegistrationMutation(registration,reserve?'Płatność zapisana — uczestnik pozostaje na liście rezerwowej':'Płatność oznaczona jako opłacona');
   }
   if (action === 'confirm') {
-    registration.status = 'confirmed';
-    registration.paymentStatus = Number(registration.feeSnapshot) > 0 ? registration.paymentStatus : 'not_required';
+    const reserve = registrationIsReserve(registration,state);
+    registration.status = reserve ? 'waitlist' : 'confirmed';
     registration.confirmedAt = new Date().toISOString();
     registration.paymentDeadline = null;
-    registration.waitlistPosition = null;
-    return finalizeRegistrationMutation(registration,'Udział potwierdzony');
+    recordRegistrationPaymentEvent(registration,'confirmed','Udział potwierdzony bez wymaganej płatności');
+    return finalizeRegistrationMutation(registration,reserve?'Potwierdzono uczestnika z listy rezerwowej':'Udział potwierdzony');
   }
   if (action === 'cancel') {
     if (!confirm(`Anulować zgłoszenie „${registration.playerName}”?`)) return;
     registration.status = 'cancelled';
     registration.cancelledAt = new Date().toISOString();
     registration.paymentDeadline = null;
+    recordRegistrationPaymentEvent(registration,'cancelled','Zgłoszenie anulowane');
     return finalizeRegistrationMutation(registration,'Zgłoszenie anulowane');
   }
   if (action === 'refund') {
@@ -2531,16 +2638,18 @@ function registrationAction(id, action) {
     registration.paymentStatus = 'refunded';
     registration.refundedAt = new Date().toISOString();
     registration.paymentDeadline = null;
+    recordRegistrationPaymentEvent(registration,'refunded','Zwrot wpisowego');
     return finalizeRegistrationMutation(registration,'Zwrot oznaczony w systemie');
   }
   if (action === 'restore') {
     if (!['cancelled','refunded','rejected','payment_expired'].includes(registration.status)) return;
+    registration.refundedAt = null;
+    registration.cancelledAt = null;
+    registration.confirmedAt = null;
+    registration.paidAt = null;
     if (Number(registration.feeSnapshot) > 0) {
       registration.status = 'payment_pending';
       registration.paymentStatus = 'pending';
-      registration.paidAt = null;
-      registration.refundedAt = null;
-      registration.cancelledAt = null;
       registration.paymentDeadline = registration.source === 'self' ? registrationPaymentDeadline(state) : null;
     } else {
       registration.status = 'confirmed';
@@ -2548,24 +2657,8 @@ function registrationAction(id, action) {
       registration.confirmedAt = new Date().toISOString();
       registration.paymentDeadline = null;
     }
+    recordRegistrationPaymentEvent(registration,'restored','Zgłoszenie przywrócone');
     return finalizeRegistrationMutation(registration,'Zgłoszenie przywrócone');
-  }
-  if (action === 'promote') {
-    if (registration.status !== 'waitlist') return;
-    const counts = registrationCounts(state);
-    if (counts.available <= 0) return toast('Brak wolnego miejsca');
-    if (Number(registration.feeSnapshot) > 0) {
-      registration.status = 'payment_pending';
-      registration.paymentStatus = 'pending';
-      registration.paymentDeadline = registrationPaymentDeadline(state);
-    } else {
-      registration.status = 'confirmed';
-      registration.paymentStatus = 'not_required';
-      registration.confirmedAt = new Date().toISOString();
-      registration.paymentDeadline = null;
-    }
-    registration.waitlistPosition = null;
-    return finalizeRegistrationMutation(registration,'Uczestnik przeniesiony z listy rezerwowej');
   }
 }
 
@@ -2574,30 +2667,29 @@ function setRegistrationPaid(id, paid) {
   const registration = registrationById(id);
   if (!registration) return;
   if (Number(registration.feeSnapshot) <= 0) return toast('Ten uczestnik nie ma wpisowego do opłacenia');
-  if (['cancelled','refunded','rejected','payment_expired'].includes(registration.status)) {
+  if (registrationIsTerminal(registration)) {
     render();
     return toast('Najpierw przywróć aktywne zgłoszenie');
   }
-  if (registration.status === 'waitlist') {
-    render();
-    return toast('Osoba z listy rezerwowej nie ma jeszcze aktywnego miejsca');
-  }
+  const reserve = registrationIsReserve(registration,state);
 
   if (paid) {
-    registration.status = 'paid';
+    registration.status = reserve ? 'waitlist' : 'paid';
     registration.paymentStatus = 'paid';
     registration.paidAt = new Date().toISOString();
+    registration.confirmedAt = null;
     registration.paymentDeadline = null;
-    registration.waitlistPosition = null;
-    return finalizeRegistrationMutation(registration,'Płatność oznaczona jako opłacona');
+    recordRegistrationPaymentEvent(registration,'paid',reserve?'Opłacono wpisowe na liście rezerwowej':'Opłacono wpisowe');
+    return finalizeRegistrationMutation(registration,reserve?'Wpłata zapisana — uczestnik pozostaje na liście rezerwowej':'Płatność oznaczona jako opłacona');
   }
 
-  registration.status = 'payment_pending';
+  recordRegistrationPaymentEvent(registration,'unpaid',registration.paidAt ? `Cofnięto oznaczenie wpłaty z ${registration.paidAt}` : 'Oznaczono jako nieopłacone');
+  registration.status = reserve ? 'waitlist' : 'payment_pending';
   registration.paymentStatus = 'pending';
   registration.paidAt = null;
   registration.confirmedAt = null;
   registration.refundedAt = null;
-  registration.paymentDeadline = registration.source === 'self' ? registrationPaymentDeadline(state) : null;
+  registration.paymentDeadline = registration.source === 'self' && !reserve ? registrationPaymentDeadline(state) : null;
   return finalizeRegistrationMutation(registration,'Płatność oznaczona jako nieopłacona');
 }
 
@@ -2605,7 +2697,7 @@ function registrationPaymentToggle(registration) {
   const fee = Number(registration.feeSnapshot) || 0;
   if (fee <= 0) return `<span class="badge green">Bez opłaty</span>`;
   const paid = registration.paymentStatus === 'paid';
-  const disabled = registration.status === 'waitlist' || ['cancelled','refunded','rejected','payment_expired'].includes(registration.status);
+  const disabled = registrationIsTerminal(registration);
   return `<label class="payment-toggle ${paid?'is-paid':'is-unpaid'} ${disabled?'is-disabled':''}" title="${paid?'Kliknij, aby oznaczyć jako nieopłacone':'Kliknij, aby oznaczyć jako opłacone'}">
     <input type="checkbox" data-registration-paid="${registration.id}" ${paid?'checked':''} ${disabled?'disabled':''}>
     <span class="payment-toggle-track"><span class="payment-toggle-knob"></span></span>
@@ -2615,11 +2707,10 @@ function registrationPaymentToggle(registration) {
 
 function registrationActionButtons(registration) {
   const buttons = [];
-  if (['cancelled','refunded','rejected','payment_expired'].includes(registration.status) && registration.playerId && state.players.some(item=>item.id===registration.playerId)) buttons.push(`<button class="btn small info" data-registration-action="restore" data-id="${registration.id}">Przywróć</button>`);
-  if (registration.status === 'waitlist') buttons.push(`<button class="btn small info" data-registration-action="promote" data-id="${registration.id}">Przenieś na miejsce</button>`);
-  if (['payment_pending','registered','waitlist'].includes(registration.status) && registration.paymentStatus !== 'paid') buttons.push(`<button class="btn small ghost" data-registration-action="confirm" data-id="${registration.id}">${Number(registration.feeSnapshot)>0?'Potwierdź bez płatności':'Potwierdź'}</button>`);
+  if (registrationIsTerminal(registration) && registration.playerId && state.players.some(item=>item.id===registration.playerId)) buttons.push(`<button class="btn small info" data-registration-action="restore" data-id="${registration.id}">Przywróć</button>`);
+  if (!registrationIsTerminal(registration) && registration.paymentStatus !== 'paid' && !registration.confirmedAt) buttons.push(`<button class="btn small ghost" data-registration-action="confirm" data-id="${registration.id}">${Number(registration.feeSnapshot)>0?'Potwierdź bez płatności':'Potwierdź'}</button>`);
   if (registration.paymentStatus === 'paid' && registration.status !== 'refunded') buttons.push(`<button class="btn small danger" data-registration-action="refund" data-id="${registration.id}">Zwrot</button>`);
-  if (!['cancelled','refunded','rejected','payment_expired'].includes(registration.status) && registration.paymentStatus !== 'paid') buttons.push(`<button class="btn small danger" data-registration-action="cancel" data-id="${registration.id}">Anuluj</button>`);
+  if (!registrationIsTerminal(registration) && registration.paymentStatus !== 'paid') buttons.push(`<button class="btn small danger" data-registration-action="cancel" data-id="${registration.id}">Anuluj</button>`);
   return buttons.join('');
 }
 
@@ -2631,19 +2722,65 @@ function registrationPaymentDeadlineText(registration) {
   return registration.paymentDeadline ? formatDateTime(registration.paymentDeadline) : '—';
 }
 
+function registrationPaymentDateText(registration) {
+  if (!registration?.paidAt) return '—';
+  return formatDateTime(registration.paidAt);
+}
+
+function registrationPaymentDateControl(registration) {
+  if (registration?.paymentStatus !== 'paid') return '<span class="muted">—</span>';
+  const value = registration.paidAt ? localDateTimeValue(new Date(registration.paidAt)) : '';
+  return `<input type="datetime-local" class="payment-date-input" data-registration-paid-at="${registration.id}" value="${esc(value)}" title="Możesz skorygować faktyczną datę i godzinę wpłaty">`;
+}
+
+function setRegistrationPaidAt(id, value) {
+  if (!requireOrganizer()) return;
+  const registration = registrationById(id);
+  if (!registration || registration.paymentStatus !== 'paid') return;
+  const next = isoFromLocalInput(value);
+  if (!next) {
+    render();
+    return toast('Podaj prawidłową datę i godzinę wpłaty');
+  }
+  const previous = registration.paidAt;
+  registration.paidAt = next;
+  registration.updatedAt = new Date().toISOString();
+  recordRegistrationPaymentEvent(registration,'paid_date_changed',previous ? `Zmiana daty wpłaty z ${previous} na ${next}` : `Ustawiono datę wpłaty ${next}`);
+  persistRegistrationChanges([registration]);
+  render();
+  toast('Data wpłaty została zapisana');
+}
+
+function registrationPaymentHistoryTitle(registration) {
+  const history = Array.isArray(registration?.paymentHistory) ? registration.paymentHistory : [];
+  if (!history.length) return registration?.paidAt ? `Opłacono: ${formatDateTime(registration.paidAt)}` : 'Brak historii płatności';
+  const labels = {paid:'Wpłata',unpaid:'Cofnięcie wpłaty',refunded:'Zwrot',confirmed:'Potwierdzenie',cancelled:'Anulowanie',restored:'Przywrócenie',paid_date_changed:'Zmiana daty wpłaty'};
+  return history.slice(-8).map(item => `${labels[item.type] || item.type}: ${formatDateTime(item.at)}`).join(' | ');
+}
+
+function registrationRosterStatusBadge(registration, competition = state) {
+  if (registrationIsTerminal(registration)) return registrationStatusBadge(registration.status);
+  if (registrationIsReserve(registration, competition)) {
+    const paid = registration.paymentStatus === 'paid' || registration.confirmedAt;
+    return `<span class="badge blue">Lista rezerwowa</span>${paid?'<span class="badge green">Gotowy przy wolnym miejscu</span>':''}`;
+  }
+  return registrationStatusBadge(registration.status);
+}
+
 function renderUserRegistrationPanel(counts) {
   const registration = currentDeviceRegistration(state);
   const inactive = registration && ['cancelled','refunded','rejected','payment_expired'].includes(registration.status);
   const savedName = esc(localStorage.getItem(REGISTRATION_NAME_KEY) || '');
   if (registration && !inactive) {
+    const reserve = registrationIsReserve(registration,state);
     const canCancel = ['payment_pending','waitlist','registered','confirmed'].includes(registration.status) && registration.paymentStatus !== 'paid';
     return `<section class="card registration-my-card">
-      <div class="section-head"><div><h2>Twoje zgłoszenie</h2><p class="muted">${esc(registration.playerName)}</p></div>${registrationStatusBadge(registration.status)}</div>
+      <div class="section-head"><div><h2>Twoje zgłoszenie</h2><p class="muted">${esc(registration.playerName)}</p></div>${registrationRosterStatusBadge(registration,state)}</div>
       <div class="registration-detail-grid">
         <div><span>Wpisowe</span><strong>${formatMoney(registration.feeSnapshot,registration.currency)}</strong></div>
         <div><span>Metoda</span><strong>${paymentMethodLabel(registration.paymentMethod)}</strong></div>
         <div><span>Termin płatności</span><strong>${registrationPaymentDeadlineText(registration)}</strong></div>
-        <div><span>Miejsce</span><strong>${registration.status==='waitlist' ? `Rezerwowa #${registration.waitlistPosition || '—'}` : 'Zarezerwowane'}</strong></div>
+        <div><span>Miejsce</span><strong>${reserve ? `Lista rezerwowa #${registrationReservePosition(registration,state) || registration.waitlistPosition || '—'}` : `Lista podstawowa #${registrationBasePosition(registration,state) || '—'}`}</strong></div>
       </div>
       ${registration.status==='payment_pending' ? `<div class="note registration-payment-note"><strong>Oczekuje na płatność.</strong> Po wykonaniu płatności organizator oznaczy zgłoszenie jako opłacone.${state.settings.paymentInstructions?`<br><br>${esc(state.settings.paymentInstructions)}`:''}</div>` : ''}
       ${registration.status==='paid' || registration.status==='confirmed' ? '<div class="note safe-note"><strong>Miejsce potwierdzone.</strong> To zgłoszenie może zostać użyte przez organizatora przy tworzeniu listy zawodników.</div>' : ''}
@@ -2665,35 +2802,55 @@ function renderUserRegistrationPanel(counts) {
 }
 
 function renderOrganizerRegistrations(counts) {
-  const registrations = (state.registrations || []).slice().sort((a,b) => {
-    const playerA = state.players.findIndex(player => player.id === a.playerId);
-    const playerB = state.players.findIndex(player => player.id === b.playerId);
-    if (playerA >= 0 || playerB >= 0) {
-      if (playerA < 0) return 1;
-      if (playerB < 0) return -1;
-      if (playerA !== playerB) return playerA - playerB;
-    }
-    return String(a.registeredAt||'').localeCompare(String(b.registeredAt||''));
-  });
-  const unpaid = registrations.filter(item => Number(item.feeSnapshot)>0 && item.paymentStatus !== 'paid' && !['cancelled','refunded','rejected'].includes(item.status)).length;
-  const rosterLimitWarning = state.players.length > counts.maxPlayers
-    ? `<div class="note warning-note registration-roster-warning"><strong>Uwaga:</strong> na liście zawodników jest ${state.players.length} osób, a limit uczestników wynosi ${counts.maxPlayers}. Wszystkich zawodników pokazujemy w płatnościach — zwiększ limit, jeśli każdy ma mieć miejsce w turnieju.</div>`
-    : '';
+  normalizeRegistrationRosterStates(state);
+  const split = registrationRosterSplit(state);
+  const selection = registrationScheduleSelection(state);
+  const selectedIds = new Set(selection.selected.map(item => item.id));
+  const reserveSelectedIds = new Set(selection.reserveSelected.map(item => item.id));
+  const inactive = (state.registrations || []).filter(registrationIsTerminal).slice().sort((a,b)=>String(b.updatedAt||b.registeredAt||'').localeCompare(String(a.updatedAt||a.registeredAt||'')));
+  const unpaid = split.active.filter(item => Number(item.feeSnapshot)>0 && item.paymentStatus !== 'paid' && !item.confirmedAt).length;
+
+  const rowHtml = (registration, label, zone) => {
+    const reserve = zone === 'reserve';
+    const selectedReserve = reserveSelectedIds.has(registration.id);
+    const selected = selectedIds.has(registration.id);
+    return `<tr class="${registration.paymentStatus==='paid'?'registration-row-paid':'registration-row-unpaid'} ${reserve?'registration-row-reserve':''} ${selectedReserve?'registration-row-promoted':''}">
+      <td class="pos">${esc(label)}</td>
+      <td><strong>${esc(registration.playerName)}</strong>
+        ${registration.source==='player_list'?`<small class="registration-subline">z listy zawodników</small>`:''}
+        <small class="registration-subline ${reserve?'reserve-copy':'base-copy'}">${reserve?`lista rezerwowa #${registrationReservePosition(registration,state)}`:'lista podstawowa'}${selectedReserve?' · wchodzi do turnieju za nieopłacone miejsce':''}</small>
+      </td>
+      <td><strong>${formatMoney(registration.feeSnapshot,registration.currency)}</strong></td>
+      <td>${registrationPaymentToggle(registration)}</td>
+      <td><div class="registration-status-stack">${registrationRosterStatusBadge(registration,state)}${selected&&!reserve?'<span class="badge green">Do terminarza</span>':''}</div></td>
+      <td>${esc(paymentMethodLabel(registration.paymentMethod))}</td>
+      <td class="payment-date-cell" title="${esc(registrationPaymentHistoryTitle(registration))}">${registrationPaymentDateControl(registration)}</td>
+      <td>${registrationPaymentDeadlineText(registration)}</td>
+      <td><div class="row-actions">${registrationActionButtons(registration)}</div></td>
+    </tr>`;
+  };
+
+  const baseRows = split.base.map((registration,index)=>rowHtml(registration,String(index+1),'base')).join('');
+  const reserveRows = split.reserve.map((registration,index)=>rowHtml(registration,`R${index+1}`,'reserve')).join('');
+  const inactiveRows = inactive.map((registration,index)=>`<tr class="registration-row-inactive"><td class="pos">—</td><td><strong>${esc(registration.playerName)}</strong><small class="registration-subline">pozycja archiwalna</small></td><td>${formatMoney(registration.feeSnapshot,registration.currency)}</td><td>—</td><td>${registrationStatusBadge(registration.status)}</td><td>${esc(paymentMethodLabel(registration.paymentMethod))}</td><td class="payment-date-cell" title="${esc(registrationPaymentHistoryTitle(registration))}">${registrationPaymentDateText(registration)}</td><td>${registrationPaymentDeadlineText(registration)}</td><td><div class="row-actions">${registrationActionButtons(registration)}</div></td></tr>`).join('');
+
+  const tableBody = `${baseRows}${split.reserve.length?`<tr class="registration-list-divider"><td colspan="9"><span>LISTA REZERWOWA</span><small>Pozycje od R1 wzwyż. Opłacona osoba z tej listy wchodzi do rozgrywek tylko wtedy, gdy na liście podstawowej brakuje opłaconego/potwierdzonego uczestnika.</small></td></tr>${reserveRows}`:''}${inactive.length?`<tr class="registration-list-divider inactive"><td colspan="9"><span>HISTORIA / NIEAKTYWNI</span></td></tr>${inactiveRows}`:''}`;
+
   return `<section class="card registration-admin-card">
-    <div class="section-head"><div><h2>Uczestnicy i płatności</h2><p class="muted">Zawodnicy z konfiguracji są przenoszeni tutaj automatycznie. Organizator tylko zaznacza, kto zapłacił wpisowe.</p></div><div class="row-actions"><button class="btn small ghost" id="syncRosterPayments">Synchronizuj zawodników</button><button class="btn small ghost" id="refreshRegistrations">Przelicz terminy</button><button class="btn small info" id="exportRegistrationsCsv">Eksport CSV</button></div></div>
-    <div class="registration-sync-summary"><span class="badge">Zawodnicy: ${state.players.length}</span><span class="badge green">Zapłacili: ${counts.paid}</span><span class="badge yellow">Nieopłaceni: ${unpaid}</span></div>
-    ${rosterLimitWarning}
+    <div class="section-head"><div><h2>Uczestnicy i płatności</h2><p class="muted">Pierwsze ${counts.maxPlayers} aktywnych pozycji tworzy listę podstawową. Kolejne osoby są automatycznie listą rezerwową.</p></div><div class="row-actions"><button class="btn small ghost" id="syncRosterPayments">Synchronizuj zawodników</button><button class="btn small ghost" id="refreshRegistrations">Przelicz listę</button><button class="btn small info" id="exportRegistrationsCsv">Eksport CSV</button></div></div>
+    <div class="registration-sync-summary"><span class="badge">Lista podstawowa: ${split.base.length}/${counts.maxPlayers}</span><span class="badge blue">Rezerwowa: ${split.reserve.length}</span><span class="badge green">Do terminarza: ${selection.selected.length}/${counts.maxPlayers}</span><span class="badge">Podstawowa opłaceni/potwierdzeni: ${selection.baseSelected.length}</span><span class="badge ${selection.reserveSelected.length?'green':''}">Z rezerwowej do turnieju: ${selection.reserveSelected.length}</span><span class="badge yellow">Nieopłaceni: ${unpaid}</span></div>
+    ${selection.reserveSelected.length?`<div class="note safe-note registration-roster-warning"><strong>Uzupełnienie z listy rezerwowej:</strong> ${selection.reserveSelected.map(item=>esc(item.playerName)).join(', ')} ${selection.reserveSelected.length===1?'uzupełnia':'uzupełniają'} wolne miejsce po nieopłaconych/niepotwierdzonych osobach z listy podstawowej.</div>`:''}
     <form id="organizerRegistrationForm" class="inline-form registration-add-form">
       <div class="field"><label>Dodaj dodatkową osobę spoza listy zawodników</label><input name="playerName" maxlength="80" placeholder="Imię i nazwisko / pseudonim" required></div>
       ${competitionEntryFee(state)>0?`<div class="field"><label>Metoda</label><select name="paymentMethod"><option value="transfer">Przelew</option><option value="cash">Gotówka</option></select></div>`:''}
       <button class="btn primary" type="submit">Dodaj spoza listy</button>
     </form>
     <hr>
-    ${registrations.length?`<div class="table-wrap registration-table-wrap"><table class="registration-table"><thead><tr><th>#</th><th>Uczestnik</th><th>Wpisowe</th><th>Zapłacone</th><th>Status</th><th>Metoda</th><th>Termin płatności</th><th>Akcje</th></tr></thead><tbody>${registrations.map((registration,index)=>`<tr class="${registration.paymentStatus==='paid'?'registration-row-paid':'registration-row-unpaid'}"><td class="pos">${index+1}</td><td><strong>${esc(registration.playerName)}</strong>${registration.source==='player_list'?`<small class="registration-subline">z listy zawodników</small>`:''}${registration.waitlistPosition?`<small class="registration-subline">Rezerwowa #${registration.waitlistPosition}</small>`:''}</td><td><strong>${formatMoney(registration.feeSnapshot,registration.currency)}</strong></td><td>${registrationPaymentToggle(registration)}</td><td>${registrationStatusBadge(registration.status)}</td><td>${esc(paymentMethodLabel(registration.paymentMethod))}</td><td>${registrationPaymentDeadlineText(registration)}</td><td><div class="row-actions">${registrationActionButtons(registration)}</div></td></tr>`).join('')}</tbody></table></div>`:empty('Brak zawodników','Dodaj zawodników w konfiguracji. Pojawią się tutaj automatycznie.')}
+    ${split.active.length || inactive.length?`<div class="table-wrap registration-table-wrap"><table class="registration-table"><thead><tr><th>#</th><th>Uczestnik</th><th>Wpisowe</th><th>Zapłacone</th><th>Status</th><th>Metoda</th><th>Data opłacenia</th><th>Termin płatności</th><th>Akcje</th></tr></thead><tbody>${tableBody}</tbody></table></div>`:empty('Brak zawodników','Dodaj zawodników w konfiguracji. Pojawią się tutaj automatycznie.')}
   </section>
   <section class="card compact registration-schedule-card">
-    <div class="section-head"><div><h2>Kontrola przed terminarzem</h2><p class="muted">Lista płatności jest połączona z listą zawodników. Przed startem możesz szybko sprawdzić, kto ma opłacone wpisowe.</p></div><button class="btn primary" id="syncPaidParticipants" ${counts.confirmed<1?'disabled':''}>Dodaj nowych opłaconych z zapisów online</button></div>
-    <div class="kpi-mini"><span class="badge green">Opłaceni / potwierdzeni: ${counts.confirmed}</span><span class="badge yellow">Nieopłaceni: ${unpaid}</span><span class="badge">Na liście zawodników: ${state.players.length}</span></div>
+    <div class="section-head"><div><h2>Kontrola przed terminarzem</h2><p class="muted">Do rozgrywek zostanie pobranych maksymalnie ${counts.maxPlayers} osób: najpierw opłaceni/potwierdzeni z listy podstawowej, a brakujące miejsca uzupełnią opłaceni/potwierdzeni z listy rezerwowej według kolejności.</p></div><button class="btn primary" id="syncPaidParticipants" ${selection.selected.length<1?'disabled':''}>Aktualizuj uczestników do terminarza</button></div>
+    <div class="kpi-mini"><span class="badge green">Do terminarza: ${selection.selected.length}/${counts.maxPlayers}</span><span class="badge">Z podstawowej: ${selection.baseSelected.length}</span><span class="badge blue">Z rezerwowej: ${selection.reserveSelected.length}</span><span class="badge yellow">Wolne po płatnościach: ${selection.vacancies}</span><span class="badge">Na pełnej liście zawodników: ${state.players.length}</span></div>
   </section>`;
 }
 
@@ -2720,18 +2877,30 @@ function renderRegistrations() {
 
 function exportRegistrationsCsv() {
   if (!requireOrganizer()) return;
-  const rows = [['Uczestnik','Status','Kwota','Waluta','Metoda','Data zapisu','Termin płatności','Data opłacenia','Pozycja rezerwowa']];
-  (state.registrations || []).forEach(item => rows.push([
-    item.playerName,
-    registrationStatusLabel(item.status),
-    Number(item.feeSnapshot || 0).toFixed(2),
-    item.currency || 'PLN',
-    paymentMethodLabel(item.paymentMethod),
-    item.registeredAt || '',
-    item.paymentDeadline || '',
-    item.paidAt || '',
-    item.waitlistPosition || ''
-  ]));
+  const selection = registrationScheduleSelection(state);
+  const selectedIds = new Set(selection.selected.map(item=>item.id));
+  const rows = [['Uczestnik','Lista','Pozycja','Do terminarza','Status','Kwota','Waluta','Metoda','Data zapisu','Termin płatności','Data opłacenia','Historia płatności']];
+  const active = registrationRosterOrder(state);
+  const inactive = (state.registrations || []).filter(registrationIsTerminal);
+  [...active,...inactive].forEach(item => {
+    const reservePos = registrationReservePosition(item,state);
+    const basePos = registrationBasePosition(item,state);
+    const history = (item.paymentHistory || []).map(event=>`${event.type}:${event.at}`).join(' | ');
+    rows.push([
+      item.playerName,
+      registrationIsTerminal(item)?'Nieaktywny':(reservePos?'Rezerwowa':'Podstawowa'),
+      reservePos?`R${reservePos}`:(basePos || ''),
+      selectedIds.has(item.id)?'TAK':'NIE',
+      registrationStatusLabel(item.status),
+      Number(item.feeSnapshot || 0).toFixed(2),
+      item.currency || 'PLN',
+      paymentMethodLabel(item.paymentMethod),
+      item.registeredAt || '',
+      item.paymentDeadline || '',
+      item.paidAt || '',
+      history
+    ]);
+  });
   const csv = '\ufeff' + rows.map(row => row.map(value => `"${String(value ?? '').replaceAll('"','""')}"`).join(';')).join('\r\n');
   const blob = new Blob([csv], {type:'text/csv;charset=utf-8'});
   const url = URL.createObjectURL(blob);
@@ -3514,6 +3683,7 @@ function bindCurrentPage() {
   $('#organizerRegistrationForm')?.addEventListener('submit', addRegistrationByOrganizer);
   $$('[data-registration-action]').forEach(button=>button.addEventListener('click',()=>registrationAction(button.dataset.id,button.dataset.registrationAction)));
   $$('[data-registration-paid]').forEach(input=>input.addEventListener('change',()=>setRegistrationPaid(input.dataset.registrationPaid,input.checked)));
+  $$('[data-registration-paid-at]').forEach(input=>input.addEventListener('change',()=>setRegistrationPaidAt(input.dataset.registrationPaidAt,input.value)));
   $('#syncRosterPayments')?.addEventListener('click',()=>{ const result=syncPlayersToRegistrations(); render(); if(!result.created&&!result.linked&&!result.updated) toast('Lista zawodników i płatności jest już zsynchronizowana'); });
   $('#syncPaidParticipants')?.addEventListener('click',()=>{ syncEligibleRegistrationsToPlayers(); render(); });
   $('#exportRegistrationsCsv')?.addEventListener('click', exportRegistrationsCsv);
@@ -3755,8 +3925,6 @@ function saveCompetitionSettings(event) {
   const requested = settingsFromForm(data);
   const activeMatches = state.matches.filter(match=>match.status==='live' && match.liveData).length;
   if (requested.boardsCount < activeMatches) return toast(`Nie można ustawić ${requested.boardsCount} tarcz. Obecnie trwa ${activeMatches} meczów.`);
-  const occupiedRegistrations = registrationCounts(state).occupied;
-  if (requested.maxPlayers < occupiedRegistrations) return toast(`Limit uczestników nie może być mniejszy niż liczba zajętych miejsc (${occupiedRegistrations}).`);
   const oldFormat = state.settings.format;
   const oldBoardsCount = competitionBoardsCount(state);
 
@@ -3874,25 +4042,28 @@ function groupNames() {
 
 function groupNamesFromPlayers() {
   const configured = groupNames();
-  return configured.filter(group => state.players.some(player => player.group === group));
+  const players = competitionSchedulePlayers(state);
+  return configured.filter(group => players.some(player => player.group === group));
 }
 
 function autoAssignGroups() {
   if (!requireOrganizer()) return;
   if (!ensureCompetitionOpen()) return;
   if (!state.players.length) return;
+  if (!state.matches.length && state.registrations?.length) prepareCompetitionParticipantsFromPayments(state);
   autoAssignGroupsSilent();
-  saveState(); render(); toast('Zawodnicy zostali równomiernie rozdzieleni do grup');
+  saveState(); render(); toast(`Uczestnicy do terminarza zostali równomiernie rozdzieleni do grup (${competitionSchedulePlayers(state).length})`);
 }
 
 function validateGroupSetup() {
   const groups = groupNames();
   const qualifiers = Math.max(1, Number(state.settings.qualifiersPerGroup) || 1);
-  if (state.players.length < groups.length * 2) {
+  const players = competitionSchedulePlayers(state);
+  if (players.length < groups.length * 2) {
     return `Potrzeba co najmniej ${groups.length * 2} zawodników, aby w każdej z ${groups.length} grup były minimum 2 osoby.`;
   }
   for (const group of groups) {
-    const count = state.players.filter(player => player.group === group).length;
+    const count = players.filter(player => player.group === group).length;
     if (count < 2) return `Grupa ${group} ma tylko ${count} zawodników. Każda grupa musi mieć minimum 2 osoby.`;
     if (qualifiers > count) return `Z grupy ${group} nie może awansować ${qualifiers} zawodników, ponieważ grupa ma tylko ${count} osób.`;
   }
@@ -3903,18 +4074,21 @@ function validateGroupSetup() {
 function generateSchedule() {
   if (!requireOrganizer()) return;
   if (!ensureCompetitionOpen()) return;
-  if (state.registrations?.some(registrationIsEligible)) syncEligibleRegistrationsToPlayers({silent:true});
-  if (state.players.length < 2) return toast(state.registrations?.length ? 'Potrzeba co najmniej dwóch opłaconych/potwierdzonych zawodników' : 'Dodaj co najmniej dwóch zawodników');
   if (state.matches.length) return toast('Ta rozgrywka ma już terminarz. Utwórz nową rozgrywkę, aby zachować historię.');
+  const participants = prepareCompetitionParticipantsFromPayments(state);
+  if (participants.length < 2) return toast(state.registrations?.length ? 'Potrzeba co najmniej dwóch opłaconych/potwierdzonych uczestników do terminarza' : 'Dodaj co najmniej dwóch zawodników');
+  if (participants.length > competitionMaxPlayers(state)) return toast(`Do terminarza może trafić maksymalnie ${competitionMaxPlayers(state)} zawodników`);
   if (state.settings.format === 'groups') {
-    if (state.players.some(player=>!player.group || !groupNames().includes(player.group))) autoAssignGroupsSilent();
+    if (participants.some(player=>!player.group || !groupNames().includes(player.group))) autoAssignGroupsSilent();
     const error = validateGroupSetup();
     if (error) return toast(error);
   }
   buildSchedule();
   saveState();
   render();
-  toast(state.settings.format === 'groups' ? 'Faza grupowa zapisana. Drabinka powstanie automatycznie po grupach.' : 'Terminarz zapisany w tej rozgrywce');
+  const selection = registrationScheduleSelection(state);
+  const reserveInfo = selection.reserveSelected.length ? `, w tym ${selection.reserveSelected.length} z listy rezerwowej` : '';
+  toast(`${state.settings.format === 'groups' ? 'Faza grupowa' : 'Terminarz'} zapisana dla ${participants.length} uczestników${reserveInfo}.`);
 }
 
 function regenerateSchedule() {
@@ -3922,9 +4096,11 @@ function regenerateSchedule() {
   if (!ensureCompetitionOpen()) return;
   const protectedMatches = state.matches.some(m => m.status === 'completed' || m.status === 'live') || Boolean(state.live);
   if (protectedMatches) return toast('Nie można nadpisać terminarza z wynikami. Utwórz nową rozgrywkę.');
-  if (!confirm('Przebudować wyłącznie zaplanowany terminarz tej rozgrywki? Żadne inne ligi ani turnieje nie zostaną zmienione.')) return;
+  if (!confirm('Przebudować zaplanowany terminarz na podstawie aktualnych płatności i limitu uczestników?')) return;
+  const participants = prepareCompetitionParticipantsFromPayments(state);
+  if (participants.length < 2) return toast('Potrzeba co najmniej dwóch opłaconych/potwierdzonych uczestników');
   if (state.settings.format === 'groups') {
-    if (state.players.some(player=>!player.group || !groupNames().includes(player.group))) autoAssignGroupsSilent();
+    if (participants.some(player=>!player.group || !groupNames().includes(player.group))) autoAssignGroupsSilent();
     const error = validateGroupSetup();
     if (error) return toast(error);
   }
@@ -3933,12 +4109,13 @@ function regenerateSchedule() {
   buildSchedule();
   saveState();
   render();
-  toast('Zaplanowany terminarz został przebudowany');
+  toast(`Terminarz został przebudowany dla ${participants.length} uczestników`);
 }
 
 function buildSchedule() {
   state.matches = [];
   state.live = null;
+  const participants = competitionSchedulePlayers(state);
   state.knockout = {
     status: 'waiting',
     qualifiers: [],
@@ -3948,24 +4125,25 @@ function buildSchedule() {
     completedAt: null
   };
   if (state.settings.format === 'league') {
-    state.matches = roundRobin(state.players.map(p=>p.id), null, 'league');
+    state.matches = roundRobin(participants.map(p=>p.id), null, 'league');
     assignBoardsToMatches(state, state.matches);
   } else if (state.settings.format === 'groups') {
-    if (state.players.some(p=>!p.group)) autoAssignGroupsSilent();
+    if (participants.some(p=>!p.group)) autoAssignGroupsSilent();
     groupNames().forEach(group=>{
-      const ids=state.players.filter(p=>p.group===group).map(p=>p.id);
+      const ids=participants.filter(p=>p.group===group).map(p=>p.id);
       state.matches.push(...roundRobin(ids, group, 'group'));
     });
     assignBoardsToMatches(state, state.matches);
     state.knockout.status = 'waiting';
   } else {
-    createInitialKnockout(shuffle(state.players.map(p=>p.id)), []);
+    createInitialKnockout(shuffle(participants.map(p=>p.id)), []);
   }
 }
 
 function autoAssignGroupsSilent() {
   const groups=groupNames();
-  shuffle(state.players.slice()).forEach((p,i)=>p.group=groups[i%groups.length]);
+  const participants = competitionSchedulePlayers(state);
+  shuffle(participants.slice()).forEach((p,i)=>p.group=groups[i%groups.length]);
 }
 
 function roundRobin(ids, group, phase = group ? 'group' : 'league') {
@@ -4996,7 +5174,8 @@ function livePlayerStats(pid, live=scorerLive()) {
 }
 
 function computeStandings(group='all') {
-  const ids=state.players.filter(p=>group==='all'||p.group===group).map(p=>p.id);
+  const players = competitionSchedulePlayers(state);
+  const ids=players.filter(p=>group==='all'||p.group===group).map(p=>p.id);
   const rows=new Map(ids.map(id=>[id,{playerId:id,played:0,wins:0,draws:0,losses:0,legsFor:0,legsAgainst:0,diff:0,points:0,totalScore:0,totalDarts:0,average:0}]));
   state.matches.filter(m=>m.status==='completed'&&!m.bye&&(state.settings.format==='knockout'||!m.bracketRound)&&(group==='all'||m.group===group)).forEach(m=>{
     const a=rows.get(m.playerA),b=rows.get(m.playerB);if(!a||!b)return;
@@ -5009,7 +5188,8 @@ function computeStandings(group='all') {
 }
 
 function computePlayerStats() {
-  const rows=new Map(state.players.map(p=>[p.id,{playerId:p.id,matches:0,legsWon:0,totalScore:0,totalDarts:0,h100:0,h140:0,h180:0,highOut:0,bestLeg:0,average:0}]));
+  const players = competitionSchedulePlayers(state);
+  const rows=new Map(players.map(p=>[p.id,{playerId:p.id,matches:0,legsWon:0,totalScore:0,totalDarts:0,h100:0,h140:0,h180:0,highOut:0,bestLeg:0,average:0}]));
   state.matches.filter(m=>m.status==='completed'&&!m.bye).forEach(m=>{
     [m.playerA,m.playerB].forEach((pid,index)=>{const r=rows.get(pid);if(!r)return;r.matches++;r.legsWon+=index?m.legsB:m.legsA;const s=m.stats?.[pid];if(!s)return;r.totalScore+=Number(s.totalScore||0);r.totalDarts+=Number(s.totalDarts||0);r.h100+=Number(s.h100||0);r.h140+=Number(s.h140||0);r.h180+=Number(s.h180||0);r.highOut=Math.max(r.highOut,Number(s.highOut||0));const best=Number(s.bestLeg||0);if(best&&(!r.bestLeg||best<r.bestLeg))r.bestLeg=best;});
   });
@@ -5482,7 +5662,7 @@ registrationMaintenanceTimer = setInterval(() => {
   persistRegistrationChanges(changed);
   if (route === 'registrations' || route === 'dashboard' || route === 'home') render();
 }, 60000);
-if('serviceWorker' in navigator){window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js?v=2.0.1').catch(console.error));}
+if('serviceWorker' in navigator){window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js?v=2.0.2').catch(console.error));}
 
 applyStartupTabletView();
 if (!isTabletRoute() && progressCompetition()) saveState();
